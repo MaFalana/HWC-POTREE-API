@@ -139,8 +139,9 @@ async def process_point_cloud(
         logger.error(f"Unexpected error in process_point_cloud: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
     
-    # Upload file to Azure Blob Storage (jobs/{job_id}.laz)
-    azure_path = f"jobs/{job_id}.laz"
+    # Upload file to Azure Blob Storage (preserve original extension)
+    file_extension = os.path.splitext(file.filename or "")[1] or ".laz"
+    azure_path = f"jobs/{job_id}{file_extension}"
     try:
         logger.info(f"Uploading file to Azure: {azure_path}")
         DB.az.upload_file(temp_path, azure_path)

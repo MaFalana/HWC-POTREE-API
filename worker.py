@@ -210,15 +210,8 @@ class JobWorker:
             metadata = metadata_extractor.summary()
             
             # Update project with metadata
-            if metadata.get('crs'):
-                crs_str = metadata['crs']
-                # Parse CRS string (e.g., "EPSG:26916")
-                if crs_str.startswith('EPSG:'):
-                    epsg_code = crs_str
-                    project.crs = CRS(id=epsg_code, name=crs_str)
-                else:
-                    # WKT or other format
-                    project.crs = CRS(id="Unknown", proj4=crs_str)
+            # Note: CRS is now provided by user during project creation, so we don't overwrite it
+            # The user-provided CRS is used for Potree conversion
             
             if metadata.get('center'):
                 center = metadata['center']
