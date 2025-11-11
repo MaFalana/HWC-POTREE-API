@@ -1,0 +1,25 @@
+# Web Framework
+uvicorn[standard]
+fastapi
+requests
+python-multipart 
+
+# Database and Storage
+pymongo
+python-dotenv
+azure-storage-blob
+
+
+
+# Point Cloud Processing
+laspy
+pyproj
+open3d
+numpy
+pandas
+Pillow
+
+
+
+
+

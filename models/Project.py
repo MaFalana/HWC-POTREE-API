@@ -1,0 +1,49 @@
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime   
+
+
+class Location(BaseModel):
+    lat: float = Field(0.0000, description="Latitude in WGS84")
+    lon: float = Field(0.0000, description="Longitude in WGS84")
+    z: float = Field(0.0000, description="Elevation")
+
+    def _to_dict(self):
+        return self.dict()
+
+
+class CRS(BaseModel):
+    id: str = Field("", alias="_id", description="EPSG Code")
+    name: Optional[str] = Field(None, description="CRS human-readable name")
+    proj4: Optional[str] = Field(None, description="Full proj4 string")
+
+    def _to_dict(self):
+        return self.dict(by_alias=True)
+
+
+class Project(BaseModel):
+    id: str = Field("", alias="_id",description="Project Job Number")
+    name: Optional[str] = Field(None, description="Project Name")
+    client: Optional[str] = Field(None, description="Client Name")
+    date: Optional[datetime] = Field(None, description="Acquisition Date")
+    tags: List[str] = Field(default_factory=list, description="List of tags (e.g. FIELD, LOI)")
+    cloud: Optional[str] = Field(None, description="Blob URL or path to point cloud file")
+    crs: Optional[CRS] = Field(None, description="Coordinate Reference System info")
+    location: Optional[Location] = Field(None, description="Mean center location (lat/lon/z)")
+    description: Optional[str] = Field(None, description="Project description or notes")
+    thumbnail: Optional[str] = Field(None, description="URL to thumbnail or preview image")
+    point_count: Optional[int] = Field(None, description="Total number of points in the point cloud")
+
+    def _to_dict(self):
+        return self.dict(by_alias=True)
+
+
+class ProjectResponse(Project):
+    """
+    Same as Project, but can be extended later to include server-computed fields
+    like createdAt, updatedAt, or status.
+    """
+    createdAt: Optional[datetime] = Field(None, description="Project creation date")
+    updatedAt: Optional[datetime] = Field(None, description="Project update date")
+
+    status: Optional[str] = Field(None, description="Project status")
