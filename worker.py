@@ -206,7 +206,10 @@ class JobWorker:
                 progress_message="Extracting point cloud metadata..."
             )
             
-            metadata_extractor = CloudMetadata(job.file_path)
+            # Use project's CRS for coordinate transformation
+            # Format as EPSG:XXXX for CloudMetadata
+            crs_epsg = f"EPSG:{project.crs.id}" if project.crs and project.crs.id else None
+            metadata_extractor = CloudMetadata(job.file_path, crs_epsg=crs_epsg)
             metadata = metadata_extractor.summary()
             
             # Update project with metadata
