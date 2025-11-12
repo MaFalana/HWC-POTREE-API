@@ -164,12 +164,15 @@ class ThumbnailGenerator:
             # Average RGB colors per bin
             rgb_data = points[:, 2:5].astype(np.float32)
             
+            # Create accumulator array with float32 to avoid casting issues
+            rgb_accumulator = np.zeros((grid_height, grid_width, 3), dtype=np.float32)
+            
             for i in range(len(points)):
                 x_idx = x_indices[i]
                 y_idx = y_indices[i]
                 
-                # Accumulate RGB values
-                image[y_idx, x_idx, :3] += rgb_data[i]
+                # Accumulate RGB values in float32 array
+                rgb_accumulator[y_idx, x_idx] += rgb_data[i]
         
         # Calculate density per bin
         density = np.zeros((grid_height, grid_width), dtype=np.int32)
@@ -188,8 +191,8 @@ class ThumbnailGenerator:
                 
                 if count > 0:
                     if has_rgb:
-                        # Average the accumulated RGB values
-                        image[y, x, :3] = (image[y, x, :3] / count).astype(np.uint8)
+                        # Average the accumulated RGB values and convert to uint8
+                        image[y, x, :3] = np.clip(rgb_accumulator[y, x] / count, 0, 255).astype(np.uint8)
                     else:
                         # Use grayscale based on density
                         intensity = int(255 * (count / max_density))
