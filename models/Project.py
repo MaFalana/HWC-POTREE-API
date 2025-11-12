@@ -17,6 +17,9 @@ class CRS(BaseModel):
     name: Optional[str] = Field(None, description="CRS human-readable name")
     proj4: Optional[str] = Field(None, description="Full proj4 string")
 
+    class Config:
+        populate_by_name = True  # Allow populating by both 'id' and '_id'
+
     def _to_dict(self):
         return self.dict(by_alias=True)
 

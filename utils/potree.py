@@ -50,12 +50,16 @@ class PotreeConverter:
         logger.info(f"Running PotreeConverter with args: {' '.join(args)}")
 
         try:
-            # Run PotreeConverter and capture output
+            # Get the directory containing PotreeConverter binary
+            potree_dir = os.path.dirname(self.path)
+            
+            # Run PotreeConverter from its directory (it needs access to resources/)
             proc = subprocess.Popen(
                 args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True
+                text=True,
+                cwd=potree_dir
             )
 
             # Stream and log output
