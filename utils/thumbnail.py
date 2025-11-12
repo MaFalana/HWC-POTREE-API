@@ -94,7 +94,7 @@ class ThumbnailGenerator:
             logger.info(f"Reading point cloud with {total_points:,} points (sampling {sample_rate*100:.1f}%)")
             
             # Read in chunks to avoid memory issues
-            for chunk in f.chunk_iterator(chunk_size=5_000_000):
+            for chunk in f.chunk_iterator(5_000_000):
                 # Sample points from this chunk
                 n_chunk = len(chunk.x)
                 
