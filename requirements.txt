@@ -12,7 +12,7 @@ azure-storage-blob
 
 
 # Point Cloud Processing
-laspy[lazrs]
+laspy[lazrs,laszip]
 pyproj
 open3d
 numpy
