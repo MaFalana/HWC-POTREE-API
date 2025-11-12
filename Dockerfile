@@ -18,6 +18,9 @@ COPY . .
 # Set execute permission on PotreeConverter
 RUN chmod +x /app/bin/PotreeConverter
 
+# Create symlink at /app/PotreeConverter for backward compatibility
+RUN ln -s /app/bin/PotreeConverter /app/PotreeConverter
+
 # Create symlink for liblaszip (system has liblaszip.so.8, PotreeConverter needs liblaszip.so)
 RUN ln -s /usr/lib/x86_64-linux-gnu/liblaszip.so.8 /usr/lib/x86_64-linux-gnu/liblaszip.so
 
