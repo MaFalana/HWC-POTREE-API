@@ -23,7 +23,7 @@ class CloudMetadata:
         path: str,
         *,
         chunk_size: int = 5_000_000,
-        fallback_epsg: Optional[str] = None,
+        crs_epsg: Optional[str] = None,
         sample_rate: float = 1.0,  # 1.0 = exact mean; <1.0 = random sampling for speed
     ):
         if not os.path.exists(path):
@@ -35,65 +35,32 @@ class CloudMetadata:
 
         self.path = path
         self.chunk_size = chunk_size
-        self.fallback_epsg = fallback_epsg
+        self.crs_epsg = crs_epsg
         self.sample_rate = sample_rate
 
     # ---------- CRS Handling ----------
 
-    def _read_crs_obj(self) -> Optional[CRS]:
-        """Try to extract CRS from LAS header or fallback to provided EPSG."""
-        with laspy.open(self.path) as f:
-            hdr = f.header
-
-            # Preferred: parse_crs()
-            parse = getattr(hdr, "parse_crs", None)
-            if callable(parse):
-                try:
-                    crs = parse()
-                    if crs:
-                        return crs
-                except Exception:
-                    pass
-
-            # Alternate: .crs
-            crs_attr = getattr(hdr, "crs", None)
-            if crs_attr:
-                try:
-                    return CRS.from_user_input(crs_attr)
-                except Exception:
-                    pass
-
-            # Fallback: .crs_wkt
-            wkt = getattr(hdr, "crs_wkt", None)
-            if wkt:
-                try:
-                    return CRS.from_wkt(wkt)
-                except Exception:
-                    pass
-
-        if self.fallback_epsg:
+    def _get_crs_obj(self) -> Optional[CRS]:
+        """Get CRS object from provided EPSG code."""
+        if self.crs_epsg:
             try:
-                return CRS.from_user_input(self.fallback_epsg)
-            except Exception:
-                pass
-
+                # Handle both "EPSG:26916" and "26916" formats
+                epsg_code = self.crs_epsg.replace("EPSG:", "").replace("epsg:", "")
+                return CRS.from_epsg(int(epsg_code))
+            except Exception as e:
+                logger.error(f"Failed to create CRS from EPSG code '{self.crs_epsg}': {e}")
+                return None
+        
+        logger.warning("No CRS EPSG code provided to CloudMetadata")
         return None
 
     def get_crs(self) -> str:
-        """Return EPSG code if resolvable, else WKT string or 'No CRS found'."""
-        crs = self._read_crs_obj()
-        if crs is None:
-            return "No CRS found"
-        try:
-            auth = crs.to_authority()
-            if auth:
-                return f"{auth[0]}:{auth[1]}"
-        except Exception:
-            pass
-        try:
-            return crs.to_wkt()
-        except Exception:
-            return "CRS available but not serializable"
+        """Return EPSG code if available."""
+        if self.crs_epsg:
+            # Normalize to EPSG:XXXX format
+            epsg_code = self.crs_epsg.replace("EPSG:", "").replace("epsg:", "")
+            return f"EPSG:{epsg_code}"
+        return "No CRS provided"
 
     # ---------- Native-space Centers ----------
 
@@ -144,12 +111,18 @@ class CloudMetadata:
 
     def _to_wgs84(self, x: float, y: float) -> Tuple[Optional[float], Optional[float]]:
         """Transform native coordinates (x,y) → WGS84 (lon,lat)."""
-        crs_src = self._read_crs_obj()
+        crs_src = self._get_crs_obj()
         if crs_src is None:
+            logger.warning("No CRS provided, cannot transform to WGS84")
             return None, None
-        transformer = Transformer.from_crs(crs_src, CRS.from_epsg(4326), always_xy=True)
-        lon, lat = transformer.transform(x, y)
-        return lon, lat
+        
+        try:
+            transformer = Transformer.from_crs(crs_src, CRS.from_epsg(4326), always_xy=True)
+            lon, lat = transformer.transform(x, y)
+            return lon, lat
+        except Exception as e:
+            logger.error(f"Error creating Transformer from CRS '{self.crs_epsg}': {e}")
+            return None, None
 
     # ---------- Public Methods ----------
 
@@ -193,8 +166,8 @@ class CloudMetadata:
 if __name__ == "__main__":
     path = r"/Volumes/HWC Photos/Point Cloud Resources/DATA/POINTCLOUDS/MOBILE/IN_West_Inidivid-Paths.Mobile1_cloud_7.laz"
 
-    # Example fallback EPSG if header lacks CRS (e.g., NAD83 / UTM zone 16N)
-    meta = CloudMetadata(path, fallback_epsg="EPSG:26916")  # NAD83
+    # Example with EPSG code (e.g., NAD83 / UTM zone 16N)
+    meta = CloudMetadata(path, crs_epsg="EPSG:26916")
 
     info = meta.summary()
     print(f"\nFile: {info['file']}")
