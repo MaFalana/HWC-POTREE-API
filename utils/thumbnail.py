@@ -69,37 +69,60 @@ class ThumbnailGenerator:
             logger.error(f"Failed to generate thumbnail: {e}", exc_info=True)
             raise
     
-    def _read_point_cloud(self, las_path: str) -> Tuple[np.ndarray, bool]:
+    def _read_point_cloud(self, las_path: str, sample_rate: float = 0.01) -> Tuple[np.ndarray, bool]:
         """
-        Read point cloud data using laspy.
+        Read point cloud data using laspy with chunked streaming (same approach as CloudMetadata).
+        Uses sampling for large files to avoid memory issues.
         
         Args:
             las_path: Path to the LAS/LAZ file
+            sample_rate: Fraction of points to sample (0.01 = 1%)
             
         Returns:
             Tuple of (points array with X, Y, R, G, B columns, has_rgb flag)
         """
-        # Read LAS/LAZ file with laspy
-        las = laspy.read(las_path)
+        # Use chunked reading like CloudMetadata does
+        sampled_points = []
+        rng = np.random.default_rng()
+        has_rgb = False
         
-        # Extract XY coordinates
-        x = las.x
-        y = las.y
-        
-        # Check if RGB data is available
-        has_rgb = hasattr(las, 'red') and hasattr(las, 'green') and hasattr(las, 'blue')
-        
-        if has_rgb:
-            # Extract RGB values (typically 16-bit, scale to 8-bit)
-            r = (las.red / 256).astype(np.uint8)
-            g = (las.green / 256).astype(np.uint8)
-            b = (las.blue / 256).astype(np.uint8)
+        with laspy.open(las_path) as f:
+            # Check if RGB is available
+            has_rgb = 'red' in f.header.point_format.dimension_names
+            total_points = f.header.point_count
             
-            # Combine into single array: [X, Y, R, G, B]
-            points = np.column_stack([x, y, r, g, b])
-        else:
-            # No RGB, just XY: [X, Y]
-            points = np.column_stack([x, y])
+            logger.info(f"Reading point cloud with {total_points:,} points (sampling {sample_rate*100:.1f}%)")
+            
+            # Read in chunks to avoid memory issues
+            for chunk in f.chunk_iterator(chunk_size=5_000_000):
+                # Sample points from this chunk
+                n_chunk = len(chunk.x)
+                
+                # Random sampling
+                mask = rng.random(n_chunk) < sample_rate
+                if not np.any(mask):
+                    continue
+                
+                x = chunk.x[mask]
+                y = chunk.y[mask]
+                
+                if has_rgb:
+                    # Extract RGB values (typically 16-bit, scale to 8-bit)
+                    r = (chunk.red[mask] / 256).astype(np.uint8)
+                    g = (chunk.green[mask] / 256).astype(np.uint8)
+                    b = (chunk.blue[mask] / 256).astype(np.uint8)
+                    chunk_points = np.column_stack([x, y, r, g, b])
+                else:
+                    chunk_points = np.column_stack([x, y])
+                
+                sampled_points.append(chunk_points)
+        
+        # Combine all sampled chunks
+        if not sampled_points:
+            raise ValueError("No points sampled from point cloud")
+        
+        points = np.vstack(sampled_points)
+        logger.info(f"Sampled {len(points):,} points for thumbnail generation")
         
         return points, has_rgb
     
