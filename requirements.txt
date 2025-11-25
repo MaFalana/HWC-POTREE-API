@@ -19,6 +19,11 @@ numpy
 pandas
 Pillow
 
+# Testing
+pytest
+pytest-asyncio
+httpx
+
 
 
 

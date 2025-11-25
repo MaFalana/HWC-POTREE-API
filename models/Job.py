@@ -22,6 +22,9 @@ class Job(BaseModel):
     error_message: Optional[str] = Field(None, description="Error message if job failed")
     retry_count: int = Field(0, description="Number of retry attempts")
     
+    # Cancellation support
+    cancelled: bool = Field(False, description="Whether the job has been cancelled")
+    
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Job creation timestamp")
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Last update timestamp")

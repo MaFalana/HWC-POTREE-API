@@ -3,6 +3,7 @@ from config.main import *
 from routes.projects import project_router
 from routes.process import process_router
 from routes.jobs import jobs_router
+from routes.stats import stats_router
 from worker import JobWorker
 import threading
 import logging
@@ -34,10 +35,13 @@ app = FastAPI(
     ## Features
     
     * **Project Management**: Create, read, update, and delete projects with metadata
+    * **Pagination & Search**: Efficient browsing with pagination, sorting, and filtering by name, client, and tags
     * **Background Processing**: Asynchronous point cloud processing with job tracking
+    * **Job Cancellation**: Cancel in-progress jobs to free up system resources
     * **Metadata Extraction**: Automatic extraction of CRS, location, and point count
     * **Thumbnail Generation**: Automatic preview image generation from point clouds
     * **Potree Conversion**: Convert LAS/LAZ files to web-viewable Potree format
+    * **Statistics Dashboard**: Real-time statistics on projects, points, and job status
     * **Azure Integration**: Seamless integration with Azure Blob Storage
     * **Health Monitoring**: Built-in health checks for production monitoring
     
@@ -46,7 +50,10 @@ app = FastAPI(
     1. Create a project using `POST /projects/upload`
     2. Upload a point cloud file using `POST /process/{id}/potree`
     3. Monitor job status using `GET /jobs/{job_id}`
-    4. Access processed data from the updated project
+    4. Cancel a job if needed using `POST /jobs/{job_id}/cancel`
+    5. Access processed data from the updated project
+    6. Browse projects with pagination and filters using `GET /projects/`
+    7. View dashboard statistics using `GET /stats`
     
     ## Authentication
     
@@ -76,6 +83,7 @@ app = FastAPI(
 app.include_router(project_router) # Include the routers in the app
 app.include_router(process_router)
 app.include_router(jobs_router)
+app.include_router(stats_router)
 
 # and enable CORS
 app.add_middleware(
@@ -218,7 +226,9 @@ def root():
         "endpoints": {
             "projects": "/projects/",
             "process": "/process/{id}/potree",
-            "jobs": "/jobs/{job_id}"
+            "jobs": "/jobs/{job_id}",
+            "cancel_job": "/jobs/{job_id}/cancel",
+            "statistics": "/stats"
         }
     }
 

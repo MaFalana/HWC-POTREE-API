@@ -22,6 +22,16 @@ from utils.potree import PotreeConverter
 logger = logging.getLogger(__name__)
 
 
+class CancellationException(Exception):
+    """
+    Custom exception raised when a job cancellation is detected.
+    
+    This exception is used to signal that a job has been cancelled
+    and processing should stop immediately.
+    """
+    pass
+
+
 class JobWorker:
     """
     Background worker that processes point cloud conversion jobs.
@@ -171,6 +181,130 @@ class JobWorker:
             logger.error(f"Error getting next job: {e}", exc_info=True)
             return None
     
+    def _check_cancellation(self, job_id: str):
+        """
+        Check if a job has been cancelled and raise CancellationException if so.
+        
+        This method performs a lightweight database query to check only the
+        cancelled field. If the job is cancelled, it raises CancellationException
+        to stop processing immediately.
+        
+        Args:
+            job_id: ID of the job to check
+            
+        Raises:
+            CancellationException: If the job has been cancelled
+        """
+        try:
+            if self.db.is_job_cancelled(job_id):
+                logger.info(f"Job {job_id}: Cancellation detected")
+                raise CancellationException(f"Job {job_id} was cancelled")
+        except CancellationException:
+            # Re-raise CancellationException
+            raise
+        except Exception as e:
+            # Log other errors but don't stop processing
+            logger.warning(f"Error checking cancellation for job {job_id}: {e}")
+    
+    def _cleanup_cancelled_job(self, job: Job, output_dir: Optional[str] = None):
+        """
+        Clean up resources for a cancelled job.
+        
+        This method is idempotent and handles errors gracefully. It attempts to:
+        1. Delete the local temporary file
+        2. Delete the Azure job file
+        3. Delete any partial Potree output files from Azure
+        
+        Each cleanup operation is wrapped in error handling to ensure that
+        failures in one operation don't prevent other cleanup operations.
+        
+        Args:
+            job: Job object containing file paths to clean up
+            output_dir: Optional local Potree output directory to clean up
+        """
+        logger.info(f"Job {job.id}: Starting cleanup for cancelled job")
+        
+        # Delete local temp file
+        if job.file_path and os.path.exists(job.file_path):
+            try:
+                os.remove(job.file_path)
+                logger.info(f"Job {job.id}: Deleted local temp file: {job.file_path}")
+            except Exception as e:
+                logger.error(f"Job {job.id}: Failed to delete local temp file {job.file_path}: {e}")
+        
+        # Delete Azure job file
+        if job.azure_path:
+            try:
+                self.db.az.delete_blob(job.azure_path)
+                logger.info(f"Job {job.id}: Deleted Azure job file: {job.azure_path}")
+            except Exception as e:
+                logger.error(f"Job {job.id}: Failed to delete Azure job file {job.azure_path}: {e}")
+        
+        # Delete partial Potree output files from Azure
+        try:
+            # Get the project to determine the blob prefix
+            project = self.db.getProject({'_id': job.project_id})
+            if project:
+                blob_prefix = f"{project.id}/"
+                # List and delete all blobs with this prefix
+                deleted_count = 0
+                try:
+                    blobs = self.db.az.list_blobs(prefix=blob_prefix)
+                    for blob in blobs:
+                        try:
+                            self.db.az.delete_blob(blob.name)
+                            deleted_count += 1
+                        except Exception as e:
+                            logger.error(f"Job {job.id}: Failed to delete blob {blob.name}: {e}")
+                    
+                    if deleted_count > 0:
+                        logger.info(f"Job {job.id}: Deleted {deleted_count} partial Potree output files from Azure")
+                except Exception as e:
+                    logger.error(f"Job {job.id}: Failed to list blobs for cleanup: {e}")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to cleanup Potree output files: {e}")
+        
+        # Delete local Potree output directory if provided
+        if output_dir and os.path.exists(output_dir):
+            try:
+                shutil.rmtree(output_dir)
+                logger.info(f"Job {job.id}: Deleted local Potree output directory: {output_dir}")
+            except Exception as e:
+                logger.error(f"Job {job.id}: Failed to delete output directory {output_dir}: {e}")
+        
+        logger.info(f"Job {job.id}: Cleanup completed for cancelled job")
+    
+    def _handle_cancellation(self, job: Job, output_dir: Optional[str] = None):
+        """
+        Handle a cancelled job by cleaning up resources and updating status.
+        
+        This method:
+        1. Calls _cleanup_cancelled_job() to remove temporary files
+        2. Updates the job status to 'cancelled' with completed_at timestamp
+        3. Sets progress_message to "Job cancelled by user"
+        
+        Args:
+            job: Job object that was cancelled
+            output_dir: Optional local Potree output directory to clean up
+        """
+        logger.info(f"Job {job.id}: Handling cancellation")
+        
+        # Clean up resources
+        self._cleanup_cancelled_job(job, output_dir)
+        
+        # Update job status to cancelled with completed_at timestamp
+        try:
+            self.db.update_job_status(
+                job.id,
+                "cancelled",
+                progress_message="Job cancelled by user"
+            )
+            logger.info(f"Job {job.id}: Status updated to cancelled")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to update status to cancelled: {e}")
+        
+        logger.info(f"Job {job.id}: Cancellation handling completed")
+    
     def process_job(self, job: Job):
         """
         Process a job through the complete pipeline.
@@ -186,9 +320,14 @@ class JobWorker:
         8. Mark job as completed
         9. Cleanup temp files
         
+        The method checks for cancellation before each major step and handles
+        CancellationException by cleaning up resources and updating job status.
+        
         Args:
             job: Job object to process
         """
+        output_dir = None
+        
         try:
             logger.info(f"Starting processing for job {job.id}")
             
@@ -196,6 +335,9 @@ class JobWorker:
             project = self.db.getProject({'_id': job.project_id})
             if not project:
                 raise ValueError(f"Project {job.project_id} not found")
+            
+            # Check for cancellation before metadata extraction
+            self._check_cancellation(job.id)
             
             # Step 1: Extract metadata
             logger.info(f"Job {job.id}: Extracting metadata")
@@ -234,6 +376,9 @@ class JobWorker:
             
             logger.info(f"Job {job.id}: Metadata extracted - {metadata['points']} points, CRS: {metadata.get('crs')}")
             
+            # Check for cancellation before thumbnail generation
+            self._check_cancellation(job.id)
+            
             # Step 2: Generate thumbnail
             logger.info(f"Job {job.id}: Generating thumbnail")
             self.db.update_job_status(
@@ -271,6 +416,9 @@ class JobWorker:
             self.db.updateProject(project)
             logger.info(f"Job {job.id}: Project updated with metadata and thumbnail")
             
+            # Check for cancellation before Potree conversion
+            self._check_cancellation(job.id)
+            
             # Step 5: Run PotreeConverter
             logger.info(f"Job {job.id}: Starting Potree conversion")
             self.db.update_job_status(
@@ -290,6 +438,9 @@ class JobWorker:
             converter.convert(job.file_path, output_dir, project)
             
             logger.info(f"Job {job.id}: Potree conversion completed")
+            
+            # Check for cancellation before Azure upload
+            self._check_cancellation(job.id)
             
             # Step 6: Upload Potree output to Azure
             logger.info(f"Job {job.id}: Uploading Potree files to Azure")
@@ -329,6 +480,11 @@ class JobWorker:
                     logger.info(f"Deleted Potree output directory: {output_dir}")
                 except Exception as e:
                     logger.warning(f"Failed to delete output directory {output_dir}: {e}")
+        
+        except CancellationException as e:
+            # Handle job cancellation
+            logger.info(f"Job {job.id}: Cancellation exception caught: {e}")
+            self._handle_cancellation(job, output_dir)
             
         except Exception as e:
             logger.error(f"Job {job.id} failed: {e}", exc_info=True)
@@ -339,7 +495,7 @@ class JobWorker:
             
             # Clean up output directory if it exists
             try:
-                if 'output_dir' in locals() and output_dir and os.path.exists(output_dir):
+                if output_dir and os.path.exists(output_dir):
                     shutil.rmtree(output_dir)
                     logger.info(f"Deleted Potree output directory after failure: {output_dir}")
             except Exception as cleanup_error:

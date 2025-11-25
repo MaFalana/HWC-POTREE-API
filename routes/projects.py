@@ -47,18 +47,35 @@ def parse_tags(raw: Optional[str]) -> List[str]:
 @project_router.get(
     '/',
     summary="List all projects",
-    description="Retrieve a list of all projects with their metadata, including point cloud URLs, thumbnails, and location data.",
-    response_description="List of projects with metadata"
+    description="Retrieve a list of all projects with their metadata, including point cloud URLs, thumbnails, and location data. Supports pagination, sorting, and filtering.",
+    response_description="List of projects with metadata and pagination information"
 )
-async def get_all_projects():
+async def get_all_projects(
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    search: Optional[str] = None,
+    client: Optional[str] = None,
+    tags: Optional[str] = None
+):
     """
-    List all projects in the database.
+    List all projects in the database with pagination, sorting, and filtering support.
     
-    Returns a list of all projects with their complete metadata including:
+    Returns a list of projects with their complete metadata including:
     - Project identification (id, name, client)
     - Point cloud data (cloud URL, CRS, location)
     - Thumbnails and visualization data
     - Timestamps (created_at, updated_at)
+    
+    **Query Parameters:**
+    - **limit** (optional): Number of projects per page (1-100, default: 50)
+    - **offset** (optional): Number of projects to skip (default: 0)
+    - **sort_by** (optional): Field to sort by - created_at, date, name, client (default: created_at)
+    - **sort_order** (optional): Sort order - asc or desc (default: desc)
+    - **search** (optional): Search term for project name and description (case-insensitive)
+    - **client** (optional): Filter by client name (case-insensitive exact match)
+    - **tags** (optional): Comma-separated list of tags to filter by (OR logic)
     
     **Example Response:**
     ```json
@@ -73,26 +90,98 @@ async def get_all_projects():
           "thumbnail": "https://storage.blob.core.windows.net/..."
         }
       ],
-      "total": 1
+      "pagination": {
+        "total": 150,
+        "limit": 50,
+        "offset": 0,
+        "has_more": true
+      }
     }
     ```
     """
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Query
     
-    logger.info("Retrieving all projects")
+    logger.info(f"Retrieving projects with pagination (limit={limit}, offset={offset}, sort_by={sort_by}, sort_order={sort_order})")
     
     try:
-        projects = DB.getProjects({})
+        # Validate limit parameter
+        if limit < 1:
+            raise HTTPException(status_code=400, detail="limit must be at least 1")
+        if limit > 100:
+            limit = 100  # Cap at 100
         
-        logger.info(f"Retrieved {len(projects)} projects")
+        # Validate offset parameter
+        if offset < 0:
+            raise HTTPException(status_code=400, detail="offset cannot be negative")
+        
+        # Validate sort_by parameter
+        valid_sort_fields = ["created_at", "date", "name", "client"]
+        if sort_by not in valid_sort_fields:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid sort_by field. Allowed: {', '.join(valid_sort_fields)}"
+            )
+        
+        # Validate sort_order parameter
+        valid_sort_orders = ["asc", "desc"]
+        if sort_order not in valid_sort_orders:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid sort_order. Allowed: {', '.join(valid_sort_orders)}"
+            )
+        
+        # Build query filter
+        query_filter = {}
+        
+        # Add search filter (case-insensitive partial match on name and description)
+        if search:
+            search_pattern = {"$regex": search, "$options": "i"}
+            query_filter["$or"] = [
+                {"name": search_pattern},
+                {"description": search_pattern}
+            ]
+        
+        # Add client filter (case-insensitive exact match)
+        if client:
+            query_filter["client"] = {"$regex": f"^{client}$", "$options": "i"}
+        
+        # Add tags filter (OR logic - match any of the provided tags)
+        if tags:
+            tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+            if tags_list:
+                query_filter["tags"] = {"$in": tags_list}
+        
+        # Get paginated projects from database
+        result = DB.get_projects_paginated(
+            query_filter=query_filter,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset
+        )
+        
+        projects = result['projects']
+        total = result['total']
+        
+        # Calculate has_more flag
+        has_more = (offset + limit) < total
+        
+        logger.info(f"Retrieved {len(projects)} projects (total: {total}, has_more: {has_more})")
 
         data = {
             "Message": "Successfully retrieved a list of projects from database",
             'Projects': projects,
-            'total': len(projects)
+            'pagination': {
+                'total': total,
+                'limit': limit,
+                'offset': offset,
+                'has_more': has_more
+            }
         }
 
         return data
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to retrieve projects: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve projects from database")

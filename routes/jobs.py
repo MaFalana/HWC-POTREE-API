@@ -161,3 +161,106 @@ async def get_jobs_by_project(project_id: str):
     except Exception as e:
         logger.error(f"Failed to retrieve jobs for project {project_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve jobs from database")
+
+
+@jobs_router.post(
+    '/{job_id}/cancel',
+    summary="Cancel a job",
+    description="Cancel a pending or processing job. Cannot cancel completed, failed, or already cancelled jobs.",
+    response_description="Cancellation confirmation with job details"
+)
+async def cancel_job(job_id: str):
+    """
+    Cancel a processing job.
+    
+    Cancels a job that is currently pending or processing. The worker will
+    detect the cancellation and stop processing, cleaning up any temporary files.
+    
+    **Path Parameters:**
+    - **job_id**: Job identifier (UUID)
+    
+    **Cancellable States:**
+    - `pending`: Job will be marked as cancelled immediately
+    - `processing`: Job will be cancelled at the next checkpoint
+    
+    **Non-Cancellable States:**
+    - `completed`: Job has already finished successfully
+    - `failed`: Job has already failed
+    - `cancelled`: Job is already cancelled
+    
+    **Returns:**
+    - 200: Job cancelled successfully
+    - 404: Job not found
+    - 409: Job cannot be cancelled (already completed/failed/cancelled)
+    - 500: Server error
+    
+    **Example Response (Success):**
+    ```json
+    {
+      "message": "Job cancelled successfully",
+      "job_id": "550e8400-e29b-41d4-a716-446655440000",
+      "project_id": "XXXX-XXX-A",
+      "status": "cancelled",
+      "previous_status": "processing",
+      "cancelled_at": "2025-11-12T10:00:00Z"
+    }
+    ```
+    
+    **Example Response (Conflict):**
+    ```json
+    {
+      "detail": "Cannot cancel completed job"
+    }
+    ```
+    """
+    logger.info(f"Cancellation requested for job: {job_id}")
+    
+    try:
+        # Validate job exists
+        job = DB.get_job(job_id)
+        
+        if not job:
+            logger.warning(f"Job not found: {job_id}")
+            raise HTTPException(status_code=404, detail=f"Job with id {job_id} not found")
+        
+        # Check job status and reject cancellation for completed/failed/cancelled jobs
+        if job.status == "completed":
+            logger.warning(f"Cannot cancel completed job: {job_id}")
+            raise HTTPException(status_code=409, detail="Cannot cancel completed job")
+        
+        if job.status == "failed":
+            logger.warning(f"Cannot cancel failed job: {job_id}")
+            raise HTTPException(status_code=409, detail="Cannot cancel failed job")
+        
+        if job.status == "cancelled":
+            logger.warning(f"Job already cancelled: {job_id}")
+            raise HTTPException(status_code=409, detail="Job already cancelled")
+        
+        # Store previous status for response
+        previous_status = job.status
+        
+        # Call DB.cancel_job() for valid cancellations
+        from datetime import datetime
+        cancelled_at = datetime.utcnow()
+        success = DB.cancel_job(job_id, cancelled_at)
+        
+        if not success:
+            logger.error(f"Failed to cancel job: {job_id}")
+            raise HTTPException(status_code=500, detail="Failed to cancel job")
+        
+        # Return success response with job details
+        logger.info(f"Successfully cancelled job {job_id} (previous status: {previous_status})")
+        return {
+            "message": "Job cancelled successfully",
+            "job_id": job_id,
+            "project_id": job.project_id,
+            "status": "cancelled",
+            "previous_status": previous_status,
+            "cancelled_at": cancelled_at.isoformat() + "Z"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to cancel job {job_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to cancel job")
