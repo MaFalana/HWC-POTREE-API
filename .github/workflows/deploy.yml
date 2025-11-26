@@ -7,7 +7,7 @@ on:
 
 env:
   DOCKER_IMAGE: mfalana/hwc-potree-api
-  CONTAINER_NAME: hwc-tiff-api
+  CONTAINER_NAME: hwc-potree-api
 
 concurrency:
   group: dockerhub-${{ github.ref }}
