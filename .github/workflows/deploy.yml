@@ -7,6 +7,7 @@ on:
 
 env:
   DOCKER_IMAGE: mfalana/hwc-potree-api
+  CONTAINER_NAME: hwc-tiff-api
 
 concurrency:
   group: dockerhub-${{ github.ref }}
@@ -48,7 +49,7 @@ jobs:
         run: |
           echo "Updating Azure Container App with new image..."
           az containerapp update \
-            --name hwc-potree-api \
+            --name ${{ env.CONTAINER_NAME }} \
             --resource-group LiDAR-Breakline-Generator \
             --image docker.io/${{ env.DOCKER_IMAGE }}:${{ github.sha }}
           echo "✅ Azure Container App updated successfully!"
