@@ -164,6 +164,116 @@ async def get_jobs_by_project(project_id: str):
 
 
 @jobs_router.post(
+    '/project/{project_id}/cancel',
+    summary="Cancel all jobs for a project",
+    description="Cancel all pending or processing jobs associated with a specific project.",
+    response_description="Batch cancellation results with details"
+)
+async def cancel_project_jobs(project_id: str):
+    """
+    Cancel all active jobs for a specific project.
+    
+    Cancels all jobs with status "pending" or "processing" for the given project.
+    Completed, failed, or already cancelled jobs are ignored.
+    
+    **Path Parameters:**
+    - **project_id**: Project identifier
+    
+    **Returns:**
+    - 200: Cancellation completed (check response for details)
+    - 404: Project not found
+    - 500: Server error
+    
+    **Example Response:**
+    ```json
+    {
+      "message": "Cancelled 2 jobs for project PROJ-001",
+      "project_id": "PROJ-001",
+      "cancelled_jobs": [
+        "550e8400-e29b-41d4-a716-446655440000",
+        "660e8400-e29b-41d4-a716-446655440001"
+      ],
+      "cancelled_count": 2,
+      "skipped_count": 1
+    }
+    ```
+    
+    **Use Cases:**
+    - User uploaded wrong file and wants to stop all processing
+    - Clearing pending jobs before re-uploading
+    - Emergency stop for a specific project
+    """
+    logger.info(f"Cancelling all jobs for project: {project_id}")
+    
+    try:
+        # Verify project exists
+        project = DB.getProject({'_id': project_id})
+        if not project:
+            logger.warning(f"Project not found: {project_id}")
+            raise HTTPException(status_code=404, detail=f"Project with id {project_id} not found")
+        
+        # Get all jobs for the project
+        jobs = DB.get_jobs_by_project(project_id)
+        
+        if not jobs:
+            logger.info(f"No jobs found for project: {project_id}")
+            return {
+                "message": f"No jobs found for project {project_id}",
+                "project_id": project_id,
+                "cancelled_jobs": [],
+                "cancelled_count": 0,
+                "skipped_count": 0
+            }
+        
+        # Filter for cancellable jobs (pending or processing)
+        cancellable_jobs = [job for job in jobs if job.status in ["pending", "processing"]]
+        skipped_count = len(jobs) - len(cancellable_jobs)
+        
+        if not cancellable_jobs:
+            logger.info(f"No active jobs to cancel for project: {project_id}")
+            return {
+                "message": f"No active jobs to cancel for project {project_id}",
+                "project_id": project_id,
+                "cancelled_jobs": [],
+                "cancelled_count": 0,
+                "skipped_count": skipped_count
+            }
+        
+        # Cancel each job
+        from datetime import datetime
+        cancelled_at = datetime.utcnow()
+        cancelled_jobs = []
+        
+        for job in cancellable_jobs:
+            try:
+                success = DB.cancel_job(job.id, cancelled_at)
+                if success:
+                    cancelled_jobs.append(job.id)
+                    logger.info(f"Cancelled job {job.id} for project {project_id}")
+            except Exception as e:
+                logger.error(f"Failed to cancel job {job.id}: {e}", exc_info=True)
+                # Continue with other jobs even if one fails
+                continue
+        
+        response = {
+            "message": f"Cancelled {len(cancelled_jobs)} job(s) for project {project_id}",
+            "project_id": project_id,
+            "cancelled_jobs": cancelled_jobs,
+            "cancelled_count": len(cancelled_jobs),
+            "skipped_count": skipped_count
+        }
+        
+        logger.info(f"Cancelled {len(cancelled_jobs)} jobs for project {project_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to cancel jobs for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to cancel jobs")
+
+
+@jobs_router.post(
     '/{job_id}/cancel',
     summary="Cancel a job",
     description="Cancel a pending or processing job. Cannot cancel completed, failed, or already cancelled jobs.",

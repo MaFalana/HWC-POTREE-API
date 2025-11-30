@@ -420,6 +420,110 @@ async def update_project(
 
 
 @project_router.delete(
+    '/delete',
+    summary="Batch delete projects",
+    description="Delete multiple projects and all associated files from Azure Blob Storage.",
+    response_description="Batch deletion results with success and failure details"
+)
+async def batch_delete_projects(project_ids: List[str]):
+    """
+    Delete multiple projects and all associated files in a single request.
+    
+    This operation will:
+    1. Delete each project record from MongoDB
+    2. Delete all associated files from Azure Blob Storage (point clouds, thumbnails, etc.)
+    3. Return detailed results for each project (success or failure)
+    
+    **Warning:** This operation cannot be undone.
+    
+    **Request Body:**
+    ```json
+    ["PROJ-001", "PROJ-002", "PROJ-003"]
+    ```
+    
+    **Returns:**
+    - 200: Batch deletion completed (check response for individual results)
+    - 400: Invalid request (empty array, invalid format)
+    - 500: Server error
+    
+    **Example Response:**
+    ```json
+    {
+      "message": "Batch deletion completed",
+      "deleted": ["PROJ-001", "PROJ-002"],
+      "failed": [
+        {
+          "id": "PROJ-003",
+          "error": "Project not found"
+        }
+      ],
+      "deleted_count": 2,
+      "failed_count": 1,
+      "total": 3
+    }
+    ```
+    
+    **Behavior:**
+    - Continues processing even if individual deletions fail
+    - Returns detailed results for each project
+    - Does not rollback successful deletions if later ones fail
+    """
+    from fastapi import HTTPException
+    
+    logger.info(f"Batch delete requested for {len(project_ids)} projects")
+    
+    # Validate input
+    if not project_ids or len(project_ids) == 0:
+        raise HTTPException(status_code=400, detail="project_ids array cannot be empty")
+    
+    if len(project_ids) > 100:
+        raise HTTPException(status_code=400, detail="Cannot delete more than 100 projects at once")
+    
+    deleted = []
+    failed = []
+    
+    for project_id in project_ids:
+        try:
+            # Check if project exists
+            project = DB.getProject({'_id': project_id})
+            if not project:
+                logger.warning(f"Project not found for deletion: {project_id}")
+                failed.append({
+                    "id": project_id,
+                    "error": "Project not found"
+                })
+                continue
+            
+            # Delete project and associated files
+            DB.deleteProject(project_id)
+            deleted.append(project_id)
+            logger.info(f"Successfully deleted project: {project_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to delete project {project_id}: {e}", exc_info=True)
+            error_msg = "Failed to delete project"
+            if "azure" in str(e).lower() or "blob" in str(e).lower():
+                error_msg = "Failed to delete project files from Azure storage"
+            
+            failed.append({
+                "id": project_id,
+                "error": error_msg
+            })
+    
+    response = {
+        "message": "Batch deletion completed",
+        "deleted": deleted,
+        "failed": failed,
+        "deleted_count": len(deleted),
+        "failed_count": len(failed),
+        "total": len(project_ids)
+    }
+    
+    logger.info(f"Batch deletion completed: {len(deleted)} succeeded, {len(failed)} failed")
+    return response
+
+
+@project_router.delete(
     '/{id}/delete',
     summary="Delete project",
     description="Delete a project and all associated files from Azure Blob Storage.",
