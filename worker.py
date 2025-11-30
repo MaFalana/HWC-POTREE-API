@@ -402,8 +402,8 @@ class JobWorker:
                     overwrite=True
                 )
                 
-                # Generate SAS URL for thumbnail
-                thumbnail_url = self.db.az.generate_sas_url(thumbnail_blob_name, hours_valid=72)
+                # Generate SAS URL for thumbnail (30 days validity)
+                thumbnail_url = self.db.az.generate_sas_url(thumbnail_blob_name, hours_valid=720)
                 project.thumbnail = thumbnail_url
                 
                 logger.info(f"Job {job.id}: Thumbnail uploaded successfully")
@@ -547,9 +547,9 @@ class JobWorker:
                 logger.debug(f"Uploaded {blob_name}")
         
         # Generate SAS URL for the main viewer file
-        # Potree typically creates a metadata.json or viewer.html
+        # Potree typically creates a metadata.json or viewer.html (30 days validity)
         viewer_blob = f"{project_id}/metadata.json"
-        sas_url = self.db.az.generate_sas_url(viewer_blob, hours_valid=72)
+        sas_url = self.db.az.generate_sas_url(viewer_blob, hours_valid=720)
         
         logger.info(f"Potree output uploaded successfully, viewer URL: {sas_url}")
         return sas_url

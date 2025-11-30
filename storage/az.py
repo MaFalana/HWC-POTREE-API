@@ -109,8 +109,17 @@ class AzureStorageManager:
         return self.generate_sas_url(blob_name)
 
     # ---------- SAS URL Generator ----------
-    def generate_sas_url(self, blob_name: str, hours_valid: int = 72) -> str:
-        """Return a time-limited SAS URL for a given blob."""
+    def generate_sas_url(self, blob_name: str, hours_valid: int = 720) -> str:
+        """
+        Return a time-limited SAS URL for a given blob.
+        
+        Args:
+            blob_name: Name of the blob to generate URL for
+            hours_valid: Number of hours the URL should be valid (default: 720 = 30 days)
+            
+        Returns:
+            SAS URL with read permissions
+        """
         account_name = self.blob_service_client.account_name
         account_key = self.blob_service_client.credential.account_key
         container_name = self.container_client.container_name

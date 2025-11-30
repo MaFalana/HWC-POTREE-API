@@ -220,6 +220,51 @@ Update project metadata. Accepts partial updates.
 
 **Response:** `200 OK`
 
+#### `POST /projects/{id}/refresh-urls`
+
+Refresh expired SAS URLs for a project without re-processing the point cloud.
+
+**Use Case:** When SAS URLs expire after 30 days, use this endpoint to generate fresh URLs.
+
+**Response:** `200 OK`
+
+```json
+{
+  "message": "SAS URLs refreshed successfully",
+  "project_id": "XXXX-XXX-A",
+  "cloud": "https://storage.blob.core.windows.net/.../metadata.json?sv=...",
+  "thumbnail": "https://storage.blob.core.windows.net/.../thumbnail.png?sv=..."
+}
+```
+
+#### `DELETE /projects/delete`
+
+Batch delete multiple projects and all associated files from Azure Blob Storage.
+
+**Request Body:**
+
+```json
+["PROJ-001", "PROJ-002", "PROJ-003"]
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "message": "Batch deletion completed",
+  "deleted": ["PROJ-001", "PROJ-002"],
+  "failed": [
+    {
+      "id": "PROJ-003",
+      "error": "Project not found"
+    }
+  ],
+  "deleted_count": 2,
+  "failed_count": 1,
+  "total": 3
+}
+```
+
 #### `DELETE /projects/{id}/delete`
 
 Delete a project and all associated files from Azure Blob Storage.
@@ -313,6 +358,26 @@ Get all jobs associated with a specific project.
   }
 ]
 ```
+
+#### `POST /jobs/project/{project_id}/cancel`
+
+Cancel all pending or processing jobs for a specific project.
+
+**Response:** `200 OK`
+
+```json
+{
+  "message": "Cancelled 2 job(s) for project PROJ-001",
+  "project_id": "PROJ-001",
+  "cancelled_jobs": ["job-uuid-1", "job-uuid-2"],
+  "cancelled_count": 2,
+  "skipped_count": 1
+}
+```
+
+**Use Cases:**
+- User uploaded wrong file and wants to stop all processing
+- Clearing pending jobs before re-uploading
 
 #### `POST /jobs/{job_id}/cancel`
 
@@ -774,7 +839,7 @@ async function pollJobUntilComplete(jobId, onProgress) {
 
 ### SAS URL Expiration
 
-SAS URLs expire after 72 hours. Always check if a URL is expired before using it:
+SAS URLs expire after 30 days. Always check if a URL is expired before using it:
 
 ```javascript
 function isSASURLExpired(url) {
@@ -1073,7 +1138,7 @@ app.add_middleware(
 
 ### SAS URL Expiration
 
-SAS URLs expire after 72 hours. Always check if a URL is expired before using it:
+SAS URLs expire after 30 days. Always check if a URL is expired before using it:
 
 ```javascript
 function isSASURLExpired(url) {
