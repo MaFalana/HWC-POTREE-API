@@ -9,6 +9,7 @@ class Job(BaseModel):
     id: str = Field("", alias="_id", description="Job ID (UUID)")
     project_id: str = Field(..., description="Associated project ID")
     status: str = Field("pending", description="Job status: pending, processing, completed, failed")
+    type: Optional[str] = Field(None, description="Job type: point_cloud, ortho_conversion")
     
     # File paths
     file_path: str = Field(..., description="Local temporary file path")

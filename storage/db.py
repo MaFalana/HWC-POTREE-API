@@ -172,7 +172,7 @@ class DatabaseManager:
 
 
     def deleteProject(self, id):  # id is a string
-        """Deletes both the Mongo document and the Azure blob."""
+        """Deletes both the Mongo document and all Azure blobs for the project."""
         # find the document
         project = self.getProject({'_id': id})
         if not project:
@@ -183,10 +183,10 @@ class DatabaseManager:
         self.projectsCollection.delete_one({'_id': id})
         print(f"Deleted MongoDB record for {id}")
 
-        # delete from Azure
+        # delete all project files from Azure (including ortho files)
         try:
-            self.az.delete_blob(id)
-            print(f"Deleted Azure blob for {id}")
+            self.az.delete_project_files(id)
+            print(f"Deleted all Azure files for project {id}")
         except Exception as e:
             print(f"Azure delete failed for {id}: {e}")
 
@@ -572,3 +572,46 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error retrieving statistics: {e}")
             raise
+
+
+    # Ortho Management Methods
+
+    def update_project_ortho(self, project_id: str, file_url: str, thumbnail_url: Optional[str] = None) -> bool:
+        """
+        Update project with ortho URLs
+        
+        Args:
+            project_id: The project ID to update
+            file_url: SAS URL to the COG file
+            thumbnail_url: Optional SAS URL to the thumbnail PNG
+            
+        Returns:
+            bool: True if project was updated successfully, False if project not found
+        """
+        # Build the ortho object
+        ortho_data = {
+            'file': file_url,
+            'thumbnail': thumbnail_url
+        }
+        
+        # Update the project document
+        result = self.projectsCollection.update_one(
+            {'_id': project_id},
+            {
+                '$set': {
+                    'ortho': ortho_data,
+                    'updated_at': datetime.utcnow()
+                }
+            }
+        )
+        
+        if result.matched_count == 0:
+            print(f"Project {project_id} not found, cannot update ortho")
+            return False
+        
+        if result.modified_count > 0:
+            print(f"Updated ortho for project {project_id}")
+            return True
+        else:
+            print(f"Project {project_id} ortho already up to date")
+            return True

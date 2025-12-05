@@ -19,6 +19,9 @@ numpy
 pandas
 Pillow
 
+# Geospatial Processing (for ortho upload feature)
+GDAL>=3.8.0,<4.0.0
+
 # Testing
 pytest
 pytest-asyncio

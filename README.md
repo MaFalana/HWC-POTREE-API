@@ -7,9 +7,10 @@ A FastAPI-based backend service that processes LiDAR point cloud data (LAS/LAZ f
 - Project management (create, read, update, delete)
 - Pagination and search with filtering by name, client, and tags
 - Background point cloud processing with job tracking
+- **Orthophoto upload and Cloud Optimized GeoTIFF (COG) conversion**
 - Job cancellation for in-progress processing tasks
 - Automatic metadata extraction (CRS, location, point count)
-- Thumbnail generation from point clouds
+- Thumbnail generation from point clouds and orthophotos
 - Potree format conversion for web visualization
 - Statistics dashboard with system-wide metrics
 - Azure Blob Storage integration with SAS URLs
@@ -17,11 +18,25 @@ A FastAPI-based backend service that processes LiDAR point cloud data (LAS/LAZ f
 
 ## Workflows
 
+### Point Cloud Workflow
+
 - User uploads a project
 - User uploads a point cloud to a corresponding project
   - Point cloud is processed in background, meaning user can close out or go to different pages on frontend like Pix4D
 - Uploaded point clouds (LAS/LAZ) are temporarily stored in Azure Blob Storage then converted to Potree format
 - Output from conversion is stored in a folder with the name of the project.id
+
+### Orthophoto Workflow
+
+- User uploads an orthophoto (GeoTIFF) to an existing project
+- File is validated and uploaded to Azure temporary storage
+- Background worker processes the file:
+  - Validates GeoTIFF format using GDAL
+  - Converts to Cloud Optimized GeoTIFF (COG) for efficient web streaming
+  - Generates thumbnail preview (512px wide)
+  - Uploads COG and thumbnail to Azure
+  - Updates project with ortho URLs
+- User can view orthophoto alongside point cloud data
 
 ## Environment Variables
 
@@ -52,6 +67,9 @@ The following environment variables must be set for the application to run:
 - Docker and Docker Compose
 - MongoDB instance (local or Atlas)
 - Azure Blob Storage account
+- **GDAL** (Geospatial Data Abstraction Library) - Required for orthophoto processing
+  - Version 3.0 or higher recommended
+  - Must include COG (Cloud Optimized GeoTIFF) driver support
 
 ### Running with Docker
 
@@ -101,6 +119,62 @@ chmod +x bin/PotreeConverter
 ```
 
 **Note:** The Windows version in `utils/Potree Converter 2.1.1/` is for reference only. The Docker container uses the Linux binary from `bin/PotreeConverter`.
+
+### GDAL Setup
+
+The application requires GDAL (Geospatial Data Abstraction Library) for orthophoto processing. GDAL is used to:
+
+- Validate uploaded GeoTIFF files
+- Convert GeoTIFF to Cloud Optimized GeoTIFF (COG) format
+- Generate thumbnail previews
+
+**Docker Installation (Recommended):**
+
+GDAL is automatically installed in the Docker container via the Dockerfile. No manual installation needed.
+
+**Local Development Installation:**
+
+For local development without Docker, install GDAL:
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y gdal-bin python3-gdal
+```
+
+**macOS (using Homebrew):**
+
+```bash
+brew install gdal
+pip install gdal==$(gdal-config --version)
+```
+
+**Windows:**
+
+Download and install from: https://gdal.org/download.html
+
+Or use OSGeo4W: https://trac.osgeo.org/osgeo4w/
+
+**Verify Installation:**
+
+```bash
+# Check GDAL version
+gdalinfo --version
+
+# Check COG driver support
+gdalinfo --format COG
+```
+
+**Expected Output:**
+
+```
+GDAL 3.x.x, released 2023/xx/xx
+Format Details:
+  Short Name: COG
+  Long Name: Cloud Optimized GeoTIFF
+  ...
+```
 
 ### Testing Point Cloud Conversion Locally
 
@@ -277,6 +351,57 @@ Delete a project and all associated files from Azure Blob Storage.
 }
 ```
 
+### Orthophoto
+
+#### `POST /projects/{project_id}/ortho`
+
+Upload an orthophoto (GeoTIFF) file for a project and start background COG conversion.
+
+**Path Parameters:**
+
+- `project_id`: Project ID
+
+**Form Data:**
+
+- `file`: GeoTIFF file (.tif or .tiff, max 30GB)
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "message": "Ortho upload accepted for processing",
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "project_id": "PROJ-001",
+  "status": "pending",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Processing Steps:**
+
+1. File uploaded to Azure Blob Storage (`jobs/{job_id}.tif`)
+2. Job record created in MongoDB with status "pending"
+3. Background worker picks up job and:
+   - Validates GeoTIFF with `gdalinfo`
+   - Converts to COG format with JPEG compression
+   - Generates 512px thumbnail preview
+   - Uploads COG and thumbnail to Azure
+   - Updates project with ortho URLs
+   - Cleans up temporary files
+
+**Project Response After Processing:**
+
+```json
+{
+  "_id": "PROJ-001",
+  "name": "Highway Survey",
+  "ortho": {
+    "file": "https://storage.blob.core.windows.net/.../ortho.tif?sas_token",
+    "thumbnail": "https://storage.blob.core.windows.net/.../ortho_thumbnail.png?sas_token"
+  }
+}
+```
+
 ### Processing
 
 #### `POST /process/{id}/potree`
@@ -376,6 +501,7 @@ Cancel all pending or processing jobs for a specific project.
 ```
 
 **Use Cases:**
+
 - User uploaded wrong file and wants to stop all processing
 - Clearing pending jobs before re-uploading
 
@@ -625,7 +751,14 @@ curl "http://localhost:8000/projects/?client=Test%20Client"
 curl "http://localhost:8000/projects/?tags=test,survey"
 ```
 
-**Step 7: View system statistics**
+**Step 7: Upload an orthophoto (optional)**
+
+```bash
+curl -X POST "http://localhost:8000/projects/TEST-001-A/ortho" \
+  -F "file=@/path/to/your/orthophoto.tif"
+```
+
+**Step 8: View system statistics**
 
 ```bash
 curl "http://localhost:8000/stats"
@@ -689,6 +822,27 @@ TEST-001-A/
 - Check that point cloud has valid XY coordinates
 - Verify file is not corrupted
 
+**Issue: "GDAL not found" or "gdalinfo command not found"**
+
+- Verify GDAL is installed: `gdalinfo --version`
+- Check GDAL is in system PATH
+- For Docker: Rebuild container to ensure GDAL is installed
+- For local: Install GDAL using package manager (see GDAL Setup section)
+
+**Issue: Ortho job fails with "Invalid GeoTIFF file"**
+
+- Verify file is a valid GeoTIFF: `gdalinfo your_file.tif`
+- Check file has georeferencing information
+- Ensure file is not corrupted or password-protected
+- Try opening file in QGIS or similar GIS software
+
+**Issue: COG conversion fails**
+
+- Check GDAL supports COG driver: `gdalinfo --format COG`
+- Verify GDAL version is 3.0 or higher
+- Check disk space for temporary files
+- Review worker logs for GDAL error messages
+
 ### Viewing Logs
 
 **Docker logs:**
@@ -722,6 +876,7 @@ curl http://localhost:8000/health
 - **Azure Blob Storage** - File storage
 - **PDAL** - Point cloud processing
 - **PotreeConverter** - Point cloud format conversion
+- **GDAL** - Geospatial data processing and COG conversion
 - **Docker** - Containerization
 
 ## License
@@ -1193,4 +1348,3 @@ For issues or questions:
 - GitHub: https://github.com/MaFalana/HWC-POTREE-API
 - Check `/health` endpoint for API status
 - Review logs in Azure Container Apps
-

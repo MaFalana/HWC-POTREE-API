@@ -619,6 +619,167 @@ async def batch_delete_projects(project_ids: List[str]):
     return response
 
 
+@project_router.post(
+    '/{project_id}/ortho',
+    status_code=202,
+    summary="Upload orthophoto for project",
+    description="Upload a GeoTIFF file for a project. The file will be converted to Cloud Optimized GeoTIFF (COG) format.",
+    response_description="Job created for ortho conversion"
+)
+async def upload_ortho(
+    project_id: str,
+    file: UploadFile = File(...)
+):
+    """
+    Upload an orthophoto (GeoTIFF) file for a project.
+    
+    The uploaded file will be:
+    1. Validated for correct file extension (.tif or .tiff)
+    2. Uploaded to Azure temporary storage
+    3. Queued for conversion to Cloud Optimized GeoTIFF (COG) format
+    4. Processed to generate a thumbnail preview
+    5. Stored in the project's Azure storage location
+    
+    **Path Parameters:**
+    - **project_id**: Project identifier
+    
+    **Form Parameters:**
+    - **file**: GeoTIFF file (.tif or .tiff, max 30GB)
+    
+    **Returns:**
+    - 202 Accepted: File uploaded and job created
+    - 400 Bad Request: Invalid file type or missing file
+    - 404 Not Found: Project not found
+    - 413 Payload Too Large: File exceeds 30GB limit
+    - 500 Internal Server Error: Server error
+    
+    **Example Response:**
+    ```json
+    {
+      "message": "Ortho upload accepted for processing",
+      "job_id": "550e8400-e29b-41d4-a716-446655440000",
+      "project_id": "PROJ-001",
+      "status": "pending",
+      "created_at": "2024-01-15T10:30:00Z"
+    }
+    ```
+    
+    **Workflow:**
+    1. Upload ortho using this endpoint
+    2. Monitor job status using GET /jobs/{job_id}
+    3. Access processed ortho from updated project (GET /projects/{id})
+    
+    **Notes:**
+    - Uploading a new ortho will overwrite any existing ortho for the project
+    - Processing time varies based on file size (typically 5-30 minutes)
+    - The job can be cancelled using POST /jobs/{job_id}/cancel
+    """
+    from fastapi import HTTPException
+    import uuid
+    import tempfile
+    import os
+    
+    logger.info(f"Ortho upload requested for project: {project_id}")
+    
+    try:
+        # Validate project exists
+        project = DB.getProject({'_id': project_id})
+        if not project:
+            logger.warning(f"Project not found for ortho upload: {project_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project with id {project_id} not found"
+            )
+        
+        # Validate file is provided
+        if not file:
+            raise HTTPException(
+                status_code=400,
+                detail="No file provided"
+            )
+        
+        # Validate file extension
+        filename = file.filename.lower()
+        if not (filename.endswith('.tif') or filename.endswith('.tiff')):
+            logger.warning(f"Invalid file extension for ortho upload: {filename}")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file type. Only .tif and .tiff files are supported"
+            )
+        
+        # Validate file size (30GB limit)
+        MAX_FILE_SIZE = 30 * 1024 * 1024 * 1024  # 30GB in bytes
+        file.file.seek(0, 2)  # Seek to end of file
+        file_size = file.file.tell()
+        file.file.seek(0)  # Reset to beginning
+        
+        if file_size > MAX_FILE_SIZE:
+            logger.warning(f"File too large for ortho upload: {file_size} bytes")
+            raise HTTPException(
+                status_code=413,
+                detail=f"File size exceeds 30GB limit (uploaded: {file_size / (1024**3):.2f}GB)"
+            )
+        
+        logger.info(f"Ortho file validated: {filename}, size: {file_size / (1024**3):.2f}GB")
+        
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+        
+        # Save file to temporary location
+        temp_file_path = os.path.join(tempfile.gettempdir(), f"{job_id}.tif")
+        with open(temp_file_path, "wb") as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+        
+        logger.info(f"Saved ortho file to temporary location: {temp_file_path}")
+        
+        # Upload to Azure temporary storage
+        azure_blob_name = f"jobs/{job_id}.tif"
+        DB.az.upload_file(temp_file_path, azure_blob_name)
+        logger.info(f"Uploaded ortho to Azure: {azure_blob_name}")
+        
+        # Clean up temporary file
+        os.remove(temp_file_path)
+        
+        # Create job in database
+        from models.Job import Job
+        
+        job = Job(
+            id=job_id,
+            project_id=project_id,
+            status="pending",
+            file_path="",  # Will be set by worker
+            azure_path=azure_blob_name,
+            current_step="queued",
+            progress_message="Ortho conversion job queued",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        # Add type field for ortho jobs
+        job_dict = job._to_dict()
+        job_dict['type'] = 'ortho_conversion'
+        
+        DB.jobsCollection.insert_one(job_dict)
+        logger.info(f"Created ortho conversion job: {job_id}")
+        
+        response = {
+            "message": "Ortho upload accepted for processing",
+            "job_id": job_id,
+            "project_id": project_id,
+            "status": "pending",
+            "created_at": job.created_at.isoformat()
+        }
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload ortho for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to upload ortho file")
+
+
 @project_router.delete(
     '/{id}/delete',
     summary="Delete project",

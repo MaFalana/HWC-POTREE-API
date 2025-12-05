@@ -26,7 +26,8 @@ app = FastAPI(
     version="2.0.0",
     description="""
     A FastAPI-based backend service for processing LiDAR point cloud data (LAS/LAZ files) 
-    and converting them to Potree format for web-based 3D visualization.
+    and converting them to Potree format for web-based 3D visualization, plus orthophoto 
+    (GeoTIFF) upload and Cloud Optimized GeoTIFF (COG) conversion.
     
     **File Size Limits:**
     - Maximum upload size: 30GB (Potree handles downsampling automatically)
@@ -39,21 +40,31 @@ app = FastAPI(
     * **Background Processing**: Asynchronous point cloud processing with job tracking
     * **Job Cancellation**: Cancel in-progress jobs to free up system resources
     * **Metadata Extraction**: Automatic extraction of CRS, location, and point count
-    * **Thumbnail Generation**: Automatic preview image generation from point clouds
+    * **Thumbnail Generation**: Automatic preview image generation from point clouds and orthophotos
     * **Potree Conversion**: Convert LAS/LAZ files to web-viewable Potree format
+    * **Orthophoto Upload**: Upload GeoTIFF files and convert to Cloud Optimized GeoTIFF (COG) format
     * **Statistics Dashboard**: Real-time statistics on projects, points, and job status
     * **Azure Integration**: Seamless integration with Azure Blob Storage
     * **Health Monitoring**: Built-in health checks for production monitoring
     
     ## Workflow
     
+    ### Point Cloud Workflow:
     1. Create a project using `POST /projects/upload`
     2. Upload a point cloud file using `POST /process/{id}/potree`
     3. Monitor job status using `GET /jobs/{job_id}`
     4. Cancel a job if needed using `POST /jobs/{job_id}/cancel`
     5. Access processed data from the updated project
-    6. Browse projects with pagination and filters using `GET /projects/`
-    7. View dashboard statistics using `GET /stats`
+    
+    ### Orthophoto Workflow:
+    1. Create or use an existing project
+    2. Upload an orthophoto using `POST /projects/{project_id}/ortho`
+    3. Monitor job status using `GET /jobs/{job_id}`
+    4. Access processed COG and thumbnail from the updated project
+    
+    ### General:
+    - Browse projects with pagination and filters using `GET /projects/`
+    - View dashboard statistics using `GET /stats`
     
     ## Authentication
     
@@ -226,6 +237,7 @@ def root():
         "endpoints": {
             "projects": "/projects/",
             "process": "/process/{id}/potree",
+            "upload_ortho": "/projects/{project_id}/ortho",
             "jobs": "/jobs/{job_id}",
             "cancel_job": "/jobs/{job_id}/cancel",
             "statistics": "/stats"

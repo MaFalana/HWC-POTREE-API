@@ -206,6 +206,373 @@ class JobWorker:
             # Log other errors but don't stop processing
             logger.warning(f"Error checking cancellation for job {job_id}: {e}")
     
+    def _download_ortho_file(self, job_id: str) -> str:
+        """
+        Download ortho file from Azure to local temp directory.
+        
+        Downloads the file from Azure storage at jobs/{job_id}.tif and saves it
+        to a local temporary directory for processing.
+        
+        Args:
+            job_id: ID of the job whose file should be downloaded
+            
+        Returns:
+            Local file path where the file was saved
+            
+        Raises:
+            Exception: If download fails
+        """
+        import tempfile
+        
+        logger.info(f"Job {job_id}: Downloading ortho file from Azure")
+        
+        try:
+            # Create temp directory for this job
+            temp_dir = tempfile.mkdtemp(prefix=f"ortho_{job_id}_")
+            local_file_path = os.path.join(temp_dir, f"{job_id}.tif")
+            
+            # Download from Azure
+            blob_name = f"jobs/{job_id}.tif"
+            self.db.az.download_file(blob_name, local_file_path)
+            
+            logger.info(f"Job {job_id}: Downloaded ortho file to {local_file_path}")
+            return local_file_path
+            
+        except Exception as e:
+            logger.error(f"Job {job_id}: Failed to download ortho file: {e}", exc_info=True)
+            raise Exception(f"Failed to download ortho file from Azure: {e}")
+    
+    def _validate_geotiff(self, file_path: str) -> None:
+        """
+        Validate that file is a readable GeoTIFF using gdalinfo.
+        
+        Runs the gdalinfo command on the file to verify it's a valid raster file.
+        This ensures the file can be processed by GDAL tools before attempting
+        conversion.
+        
+        Args:
+            file_path: Path to the file to validate
+            
+        Raises:
+            ValueError: If the file is not a valid GeoTIFF
+        """
+        import subprocess
+        
+        logger.info(f"Validating GeoTIFF file: {file_path}")
+        
+        try:
+            result = subprocess.run(
+                ['gdalinfo', file_path],
+                capture_output=True,
+                text=True,
+                timeout=60  # 60 second timeout for validation
+            )
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                logger.error(f"GeoTIFF validation failed: {error_msg}")
+                raise ValueError(f"Invalid GeoTIFF file: {error_msg}")
+            
+            logger.info(f"GeoTIFF validation successful for {file_path}")
+            logger.debug(f"gdalinfo output: {result.stdout[:500]}")  # Log first 500 chars
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"GeoTIFF validation timed out for {file_path}")
+            raise ValueError("GeoTIFF validation timed out")
+        except FileNotFoundError:
+            logger.error("gdalinfo command not found - GDAL may not be installed")
+            raise ValueError("GDAL tools not available on system")
+        except Exception as e:
+            logger.error(f"Error during GeoTIFF validation: {e}", exc_info=True)
+            raise ValueError(f"Failed to validate GeoTIFF: {e}")
+    
+    def _convert_to_cog(self, input_path: str, job_id: str) -> str:
+        """
+        Convert GeoTIFF to Cloud Optimized GeoTIFF (COG) format.
+        
+        Uses gdal_translate with COG driver to create an optimized GeoTIFF with:
+        - JPEG compression (quality 85)
+        - Tiling enabled (512px blocks)
+        - Optimized for streaming and partial reads
+        
+        Args:
+            input_path: Path to the input GeoTIFF file
+            job_id: Job ID for logging and progress tracking
+            
+        Returns:
+            Path to the output COG file
+            
+        Raises:
+            RuntimeError: If COG conversion fails
+        """
+        import subprocess
+        
+        logger.info(f"Job {job_id}: Starting COG conversion")
+        logger.info(f"Job {job_id}: Converting to COG format with JPEG compression")
+        
+        # Update job progress
+        self.db.update_job_status(
+            job_id,
+            "processing",
+            progress_message="Converting to COG"
+        )
+        
+        try:
+            # Create output path in same directory as input
+            # Handle both .tif and .tiff extensions (case-insensitive)
+            if input_path.lower().endswith('.tiff'):
+                output_path = input_path[:-5] + '_cog' + input_path[-5:]
+            elif input_path.lower().endswith('.tif'):
+                output_path = input_path[:-4] + '_cog' + input_path[-4:]
+            else:
+                # Fallback - should not happen due to validation
+                output_path = input_path + '_cog.tif'
+            
+            # Run gdal_translate with COG driver
+            result = subprocess.run([
+                'gdal_translate',
+                '-of', 'COG',
+                '-co', 'COMPRESS=JPEG',
+                '-co', 'QUALITY=85',
+                '-co', 'TILED=YES',
+                '-co', 'BLOCKSIZE=512',
+                input_path,
+                output_path
+            ], capture_output=True, text=True, timeout=3600)  # 1 hour timeout
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                logger.error(f"Job {job_id}: COG conversion failed: {error_msg}")
+                raise RuntimeError(f"COG conversion failed: {error_msg}")
+            
+            # Verify output file was created
+            if not os.path.exists(output_path):
+                logger.error(f"Job {job_id}: COG output file not created at {output_path}")
+                raise RuntimeError("COG conversion failed: output file not created")
+            
+            logger.info(f"Job {job_id}: COG conversion completed successfully")
+            logger.info(f"Job {job_id}: Output file: {output_path}")
+            
+            # Delete original uploaded file after successful conversion
+            if os.path.exists(input_path):
+                try:
+                    os.remove(input_path)
+                    logger.info(f"Job {job_id}: Deleted original uploaded file: {input_path}")
+                except Exception as e:
+                    logger.warning(f"Job {job_id}: Failed to delete original file {input_path}: {e}")
+            
+            return output_path
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"Job {job_id}: COG conversion timed out")
+            raise RuntimeError("COG conversion timed out after 1 hour")
+        except FileNotFoundError:
+            logger.error(f"Job {job_id}: gdal_translate command not found - GDAL may not be installed")
+            raise RuntimeError("GDAL tools not available on system")
+        except Exception as e:
+            logger.error(f"Job {job_id}: Error during COG conversion: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to convert to COG: {e}")
+    
+    def _generate_ortho_thumbnail(self, cog_path: str, job_id: str) -> Optional[str]:
+        """
+        Generate thumbnail from COG file.
+        
+        Uses gdal_translate to create a PNG preview with 512px width and proportional height.
+        This method is designed to be non-blocking - if thumbnail generation fails, it logs
+        the error and returns None, allowing the main job to continue successfully.
+        
+        Args:
+            cog_path: Path to the COG file
+            job_id: Job ID for logging and progress tracking
+            
+        Returns:
+            Path to the generated thumbnail PNG file, or None if generation fails
+        """
+        import subprocess
+        
+        logger.info(f"Job {job_id}: Starting thumbnail generation")
+        
+        # Update job progress
+        self.db.update_job_status(
+            job_id,
+            "processing",
+            progress_message="Generating thumbnail"
+        )
+        
+        try:
+            # Create thumbnail path in same directory as COG
+            # Handle both .tif and .tiff extensions (case-insensitive)
+            if cog_path.lower().endswith('.tiff'):
+                thumbnail_path = cog_path[:-5] + '_thumbnail.png'
+            elif cog_path.lower().endswith('.tif'):
+                thumbnail_path = cog_path[:-4] + '_thumbnail.png'
+            else:
+                # Fallback - should not happen
+                thumbnail_path = cog_path + '_thumbnail.png'
+            
+            # Run gdal_translate to create PNG thumbnail
+            # -outsize 512 0 means 512px wide with proportional height
+            result = subprocess.run([
+                'gdal_translate',
+                '-of', 'PNG',
+                '-outsize', '512', '0',
+                cog_path,
+                thumbnail_path
+            ], capture_output=True, text=True, timeout=30)  # 30 second timeout
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+                logger.warning(f"Job {job_id}: Thumbnail generation failed: {error_msg}")
+                return None
+            
+            # Verify output file was created
+            if not os.path.exists(thumbnail_path):
+                logger.warning(f"Job {job_id}: Thumbnail file not created at {thumbnail_path}")
+                return None
+            
+            logger.info(f"Job {job_id}: Thumbnail generated successfully: {thumbnail_path}")
+            return thumbnail_path
+            
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Job {job_id}: Thumbnail generation timed out after 30 seconds")
+            return None
+        except FileNotFoundError:
+            logger.warning(f"Job {job_id}: gdal_translate command not found - GDAL may not be installed")
+            return None
+        except Exception as e:
+            logger.warning(f"Job {job_id}: Error during thumbnail generation: {e}", exc_info=True)
+            return None
+    
+    def _upload_ortho_to_azure(self, project_id: str, cog_path: str, thumbnail_path: Optional[str], job_id: str) -> dict:
+        """
+        Upload COG and thumbnail to Azure Blob Storage.
+        
+        Uploads the COG file to {project_id}/ortho/ortho.tif and optionally uploads
+        the thumbnail to {project_id}/ortho/ortho_thumbnail.png. Generates SAS URLs
+        with 30-day validity for both files.
+        
+        Args:
+            project_id: Project ID for organizing files in Azure
+            cog_path: Local path to the COG file
+            thumbnail_path: Optional local path to the thumbnail PNG file
+            job_id: Job ID for logging and progress tracking
+            
+        Returns:
+            Dictionary with 'file' and 'thumbnail' keys containing SAS URLs
+            
+        Raises:
+            Exception: If Azure upload fails
+        """
+        logger.info(f"Job {job_id}: Starting Azure upload for project {project_id}")
+        
+        # Update job progress
+        self.db.update_job_status(
+            job_id,
+            "processing",
+            progress_message="Uploading to Azure"
+        )
+        
+        try:
+            # Upload COG file
+            cog_blob_name = f"{project_id}/ortho/ortho.tif"
+            logger.info(f"Job {job_id}: Uploading COG to {cog_blob_name}")
+            
+            with open(cog_path, 'rb') as f:
+                self.db.az.upload_bytes(
+                    data=f.read(),
+                    blob_name=cog_blob_name,
+                    content_type="image/tiff",
+                    overwrite=True
+                )
+            
+            logger.info(f"Job {job_id}: COG uploaded successfully")
+            
+            # Generate SAS URL for COG (30 days = 720 hours)
+            cog_url = self.db.az.generate_sas_url(cog_blob_name, hours_valid=720)
+            
+            # Upload thumbnail if it exists
+            thumbnail_url = None
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                thumbnail_blob_name = f"{project_id}/ortho/ortho_thumbnail.png"
+                logger.info(f"Job {job_id}: Uploading thumbnail to {thumbnail_blob_name}")
+                
+                with open(thumbnail_path, 'rb') as f:
+                    self.db.az.upload_bytes(
+                        data=f.read(),
+                        blob_name=thumbnail_blob_name,
+                        content_type="image/png",
+                        overwrite=True
+                    )
+                
+                logger.info(f"Job {job_id}: Thumbnail uploaded successfully")
+                
+                # Generate SAS URL for thumbnail (30 days = 720 hours)
+                thumbnail_url = self.db.az.generate_sas_url(thumbnail_blob_name, hours_valid=720)
+            else:
+                logger.info(f"Job {job_id}: No thumbnail to upload")
+            
+            result = {
+                'file': cog_url,
+                'thumbnail': thumbnail_url
+            }
+            
+            logger.info(f"Job {job_id}: Azure upload completed successfully")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Job {job_id}: Failed to upload ortho to Azure storage: {e}", exc_info=True)
+            raise Exception(f"Failed to upload ortho to Azure storage: {e}")
+    
+    def _update_project_ortho(self, project_id: str, ortho_urls: dict, job_id: str) -> None:
+        """
+        Update project document with ortho URLs.
+        
+        Retrieves the project from the database, creates an Ortho object with the
+        provided URLs, updates the project's ortho field, and saves it back to the
+        database.
+        
+        Args:
+            project_id: ID of the project to update
+            ortho_urls: Dictionary with 'file' and 'thumbnail' keys containing SAS URLs
+            job_id: Job ID for logging
+            
+        Raises:
+            ValueError: If project is not found
+            Exception: If database update fails
+        """
+        logger.info(f"Job {job_id}: Updating project {project_id} with ortho URLs")
+        
+        try:
+            # Get project from database
+            project = self.db.getProject({'_id': project_id})
+            if not project:
+                logger.error(f"Job {job_id}: Project {project_id} not found")
+                raise ValueError(f"Project {project_id} not found")
+            
+            # Create Ortho object with URLs
+            from models.Project import Ortho
+            project.ortho = Ortho(
+                file=ortho_urls['file'],
+                thumbnail=ortho_urls.get('thumbnail')  # Use .get() since thumbnail is optional
+            )
+            
+            # Update project in database
+            self.db.updateProject(project)
+            
+            logger.info(f"Job {job_id}: Successfully updated project {project_id} with ortho URLs")
+            logger.info(f"Job {job_id}: Ortho file URL: {ortho_urls['file']}")
+            if ortho_urls.get('thumbnail'):
+                logger.info(f"Job {job_id}: Ortho thumbnail URL: {ortho_urls['thumbnail']}")
+            else:
+                logger.info(f"Job {job_id}: No thumbnail URL (thumbnail generation may have failed)")
+            
+        except ValueError:
+            # Re-raise ValueError for project not found
+            raise
+        except Exception as e:
+            logger.error(f"Job {job_id}: Failed to update project {project_id} with ortho URLs: {e}", exc_info=True)
+            raise Exception(f"Failed to update project with ortho URLs: {e}")
+    
     def _cleanup_cancelled_job(self, job: Job, output_dir: Optional[str] = None):
         """
         Clean up resources for a cancelled job.
@@ -274,6 +641,241 @@ class JobWorker:
         
         logger.info(f"Job {job.id}: Cleanup completed for cancelled job")
     
+    def _cleanup_ortho_files(self, job_id: str, *file_paths):
+        """
+        Clean up local temporary files and Azure job file for ortho processing.
+        
+        This method accepts a variable number of file paths and attempts to delete
+        each one. It also deletes the Azure job file. All operations are wrapped
+        in error handling to ensure failures don't prevent other cleanup operations.
+        
+        Args:
+            job_id: Job ID for the Azure job file cleanup
+            *file_paths: Variable number of local file paths to delete
+        """
+        logger.info(f"Job {job_id}: Starting ortho file cleanup")
+        
+        # Delete local files
+        for file_path in file_paths:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Job {job_id}: Deleted local file: {file_path}")
+                except Exception as e:
+                    logger.error(f"Job {job_id}: Failed to delete {file_path}: {e}")
+        
+        # Delete Azure job file
+        try:
+            self.db.az.delete_job_file(job_id)
+            logger.info(f"Job {job_id}: Deleted Azure job file")
+        except Exception as e:
+            logger.error(f"Job {job_id}: Failed to delete Azure job file: {e}")
+        
+        logger.info(f"Job {job_id}: Ortho file cleanup completed")
+    
+    def _handle_ortho_cancellation(self, job: Job):
+        """
+        Handle cancellation of ortho job.
+        
+        This method:
+        1. Deletes local temp directory
+        2. Deletes Azure job file
+        3. Updates job status to 'cancelled' with completed_at timestamp
+        4. Sets progress_message to "Job cancelled by user"
+        
+        Args:
+            job: Job object that was cancelled
+        """
+        logger.info(f"Job {job.id}: Handling ortho job cancellation")
+        
+        # Delete local temp directory
+        temp_dir = f"/tmp/ortho_{job.id}_*"
+        import glob
+        for dir_path in glob.glob(temp_dir):
+            if os.path.exists(dir_path):
+                try:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+                    logger.info(f"Job {job.id}: Deleted temp directory: {dir_path}")
+                except Exception as e:
+                    logger.error(f"Job {job.id}: Failed to delete temp directory {dir_path}: {e}")
+        
+        # Delete Azure job file
+        try:
+            self.db.az.delete_job_file(job.id)
+            logger.info(f"Job {job.id}: Deleted Azure job file")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to delete Azure job file: {e}")
+        
+        # Update job status to cancelled
+        try:
+            self.db.update_job_status(
+                job.id,
+                "cancelled",
+                progress_message="Job cancelled by user"
+            )
+            logger.info(f"Job {job.id}: Status updated to cancelled")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to update status to cancelled: {e}")
+        
+        logger.info(f"Job {job.id}: Ortho cancellation handling completed")
+    
+    def _handle_ortho_error(self, job: Job, error: Exception):
+        """
+        Handle error during ortho job processing.
+        
+        This method:
+        1. Logs error with full stack trace
+        2. Deletes local temp files
+        3. Deletes Azure job file
+        4. Updates job status to 'failed' with error message
+        
+        Args:
+            job: Job object that failed
+            error: Exception that caused the failure
+        """
+        logger.error(f"Job {job.id}: Ortho processing error: {error}", exc_info=True)
+        
+        # Delete local temp directory
+        temp_dir = f"/tmp/ortho_{job.id}_*"
+        import glob
+        for dir_path in glob.glob(temp_dir):
+            if os.path.exists(dir_path):
+                try:
+                    shutil.rmtree(dir_path, ignore_errors=True)
+                    logger.info(f"Job {job.id}: Deleted temp directory: {dir_path}")
+                except Exception as e:
+                    logger.error(f"Job {job.id}: Failed to delete temp directory {dir_path}: {e}")
+        
+        # Delete Azure job file
+        try:
+            self.db.az.delete_job_file(job.id)
+            logger.info(f"Job {job.id}: Deleted Azure job file")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to delete Azure job file: {e}")
+        
+        # Update job status to failed
+        try:
+            error_message = str(error)
+            self.db.update_job_status(
+                job.id,
+                "failed",
+                error_message=error_message,
+                progress_message="Ortho processing failed"
+            )
+            logger.info(f"Job {job.id}: Status updated to failed with error: {error_message}")
+        except Exception as e:
+            logger.error(f"Job {job.id}: Failed to update status to failed: {e}")
+        
+        logger.info(f"Job {job.id}: Ortho error handling completed")
+    
+    def process_ortho_job(self, job: Job):
+        """
+        Process an ortho conversion job through the complete pipeline.
+        
+        Steps:
+        1. Update status to "processing"
+        2. Download ortho file from Azure
+        3. Check cancellation
+        4. Validate GeoTIFF with gdalinfo
+        5. Check cancellation
+        6. Convert to COG format
+        7. Check cancellation
+        8. Generate thumbnail (optional)
+        9. Check cancellation
+        10. Upload COG and thumbnail to Azure
+        11. Update project with ortho URLs
+        12. Mark job as completed
+        13. Cleanup temporary files
+        
+        The method checks for cancellation before each major step and handles
+        CancellationException by cleaning up resources and updating job status.
+        
+        Args:
+            job: Job object to process (must have type "ortho_conversion")
+        """
+        local_file = None
+        cog_file = None
+        thumbnail_file = None
+        
+        try:
+            logger.info(f"Job {job.id}: Starting ortho processing for project {job.project_id}")
+            
+            # Update status to processing
+            self.db.update_job_status(
+                job.id,
+                "processing",
+                progress_message="Starting ortho processing"
+            )
+            
+            # Step 1: Download ortho file from Azure
+            logger.info(f"Job {job.id}: Downloading ortho file")
+            local_file = self._download_ortho_file(job.id)
+            
+            # Check cancellation
+            self._check_cancellation(job.id)
+            
+            # Step 2: Validate GeoTIFF
+            logger.info(f"Job {job.id}: Validating GeoTIFF")
+            self.db.update_job_status(
+                job.id,
+                "processing",
+                progress_message="Validating file"
+            )
+            self._validate_geotiff(local_file)
+            
+            # Check cancellation
+            self._check_cancellation(job.id)
+            
+            # Step 3: Convert to COG
+            logger.info(f"Job {job.id}: Converting to COG")
+            cog_file = self._convert_to_cog(local_file, job.id)
+            
+            # Check cancellation
+            self._check_cancellation(job.id)
+            
+            # Step 4: Generate thumbnail (optional)
+            logger.info(f"Job {job.id}: Generating thumbnail")
+            thumbnail_file = self._generate_ortho_thumbnail(cog_file, job.id)
+            
+            # Check cancellation
+            self._check_cancellation(job.id)
+            
+            # Step 5: Upload to Azure
+            logger.info(f"Job {job.id}: Uploading to Azure")
+            ortho_urls = self._upload_ortho_to_azure(job.project_id, cog_file, thumbnail_file, job.id)
+            
+            # Step 6: Update project with ortho URLs
+            logger.info(f"Job {job.id}: Updating project")
+            self._update_project_ortho(job.project_id, ortho_urls, job.id)
+            
+            # Step 7: Mark job as completed
+            self.db.update_job_status(
+                job.id,
+                "completed",
+                progress_message="Ortho conversion completed successfully"
+            )
+            
+            logger.info(f"Job {job.id}: Ortho processing completed successfully")
+            
+            # Step 8: Cleanup temporary files
+            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+            
+        except CancellationException as e:
+            # Handle job cancellation
+            logger.info(f"Job {job.id}: Ortho cancellation exception caught: {e}")
+            self._handle_ortho_cancellation(job)
+            
+            # Cleanup files
+            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+            
+        except Exception as e:
+            # Handle general errors
+            logger.error(f"Job {job.id}: Ortho processing failed: {e}", exc_info=True)
+            self._handle_ortho_error(job, e)
+            
+            # Cleanup files
+            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+    
     def _handle_cancellation(self, job: Job, output_dir: Optional[str] = None):
         """
         Handle a cancelled job by cleaning up resources and updating status.
@@ -309,7 +911,11 @@ class JobWorker:
         """
         Process a job through the complete pipeline.
         
-        Steps:
+        Routes the job to the appropriate handler based on job type:
+        - "ortho_conversion": Routes to process_ortho_job()
+        - Other types: Routes to point cloud processing pipeline
+        
+        Point Cloud Processing Steps:
         1. Extract metadata (CRS, location, point count)
         2. Generate thumbnail
         3. Upload thumbnail to Azure
@@ -326,6 +932,14 @@ class JobWorker:
         Args:
             job: Job object to process
         """
+        # Route to appropriate handler based on job type
+        if job.type == "ortho_conversion":
+            logger.info(f"Job {job.id}: Routing to ortho processing")
+            self.process_ortho_job(job)
+            return
+        
+        # Default: Point cloud processing
+        logger.info(f"Job {job.id}: Routing to point cloud processing")
         output_dir = None
         
         try:

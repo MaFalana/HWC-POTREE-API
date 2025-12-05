@@ -24,6 +24,14 @@ class CRS(BaseModel):
         return self.dict(by_alias=True)
 
 
+class Ortho(BaseModel):
+    file: Optional[str] = Field(None, description="SAS URL to COG file")
+    thumbnail: Optional[str] = Field(None, description="SAS URL to thumbnail PNG")
+
+    def _to_dict(self):
+        return self.dict()
+
+
 class Project(BaseModel):
     id: str = Field("", alias="_id",description="Project Job Number")
     name: Optional[str] = Field(None, description="Project Name")
@@ -36,9 +44,14 @@ class Project(BaseModel):
     description: Optional[str] = Field(None, description="Project description or notes")
     thumbnail: Optional[str] = Field(None, description="URL to thumbnail or preview image")
     point_count: Optional[int] = Field(None, description="Total number of points in the point cloud")
+    ortho: Optional[Ortho] = Field(None, description="Orthophoto COG and thumbnail URLs")
 
     def _to_dict(self):
-        return self.dict(by_alias=True)
+        result = self.dict(by_alias=True)
+        # Convert nested Ortho object to dict if present
+        if self.ortho is not None:
+            result['ortho'] = self.ortho._to_dict()
+        return result
 
 
 class ProjectResponse(Project):

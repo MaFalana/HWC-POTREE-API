@@ -2,12 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for PotreeConverter
+# Install runtime dependencies for PotreeConverter and GDAL
 RUN apt-get update && apt-get install -y \
     liblaszip8 \
     libboost-system1.83.0 \
     libboost-filesystem1.83.0 \
     libboost-program-options1.83.0 \
+    gdal-bin \
+    libgdal-dev \
+    python3-gdal \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
