@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install runtime dependencies for PotreeConverter and GDAL
+# Install build dependencies and runtime dependencies for PotreeConverter and GDAL
 RUN apt-get update && apt-get install -y \
     liblaszip8 \
     libboost-system1.83.0 \
@@ -11,10 +11,19 @@ RUN apt-get update && apt-get install -y \
     gdal-bin \
     libgdal-dev \
     python3-gdal \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy requirements and install Python packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install GDAL Python bindings matching system GDAL version
+RUN GDAL_VERSION=$(gdal-config --version) && \
+    pip install --no-cache-dir GDAL==${GDAL_VERSION}
+
+# Install remaining Python packages (excluding GDAL which is already installed)
+RUN grep -v "^GDAL" requirements.txt > /tmp/requirements_filtered.txt && \
+    pip install --no-cache-dir -r /tmp/requirements_filtered.txt
 
 COPY . .
 
