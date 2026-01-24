@@ -143,19 +143,48 @@ def raster_to_leaflet_overlay(
         bounds = [[south, west], [north, east]]
         logger.info(f"Extracted bounds: {bounds}")
         
-        # Step 3: Convert to PNG with alpha transparency (no reprojection)
+        # Step 3: Convert to PNG with alpha transparency
+        # First check if source has nodata values or alpha channel
         logger.info("Converting to PNG format with alpha transparency")
-        _run([
-            "gdal_translate",
-            "-of", "PNG",
-            "-b", "1",
-            "-b", "2", 
-            "-b", "3",
-            "-mask", "none",
-            "-co", "ZLEVEL=9",
-            input_path,
-            output_png
-        ], timeout=600)
+        
+        # Check if source has alpha band or nodata values
+        has_alpha = info.get("bands", [{}])[-1].get("colorInterpretation") == "Alpha"
+        nodata_value = info.get("bands", [{}])[0].get("noDataValue")
+        
+        if has_alpha:
+            # Source already has alpha, just convert
+            logger.info("Source has alpha channel, converting directly")
+            _run([
+                "gdal_translate",
+                "-of", "PNG",
+                "-co", "ZLEVEL=9",
+                input_path,
+                output_png
+            ], timeout=600)
+        elif nodata_value is not None:
+            # Source has nodata value, convert to alpha
+            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel")
+            _run([
+                "gdal_translate",
+                "-of", "PNG",
+                "-b", "1",
+                "-b", "2",
+                "-b", "3",
+                "-b", "mask",
+                "-co", "ZLEVEL=9",
+                input_path,
+                output_png
+            ], timeout=600)
+        else:
+            # No nodata or alpha, convert as-is (no transparency)
+            logger.info("Source has no nodata or alpha, converting without transparency")
+            _run([
+                "gdal_translate",
+                "-of", "PNG",
+                "-co", "ZLEVEL=9",
+                input_path,
+                output_png
+            ], timeout=600)
         
         logger.info("Conversion completed successfully")
         

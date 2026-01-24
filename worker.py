@@ -936,6 +936,9 @@ class JobWorker:
         Args:
             job: Job object to process
         """
+        # Log job type for debugging
+        logger.info(f"Job {job.id}: Processing job with type: {job.type}")
+        
         # Route to appropriate handler based on job type
         if job.type == "ortho_conversion":
             logger.info(f"Job {job.id}: Routing to ortho processing")
