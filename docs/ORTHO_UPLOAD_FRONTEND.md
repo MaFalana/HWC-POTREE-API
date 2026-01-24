@@ -8,13 +8,15 @@ POST /projects/{project_id}/ortho
 
 **Content-Type:** `multipart/form-data`
 
-**Form Field:** `file` (the georeferenced raster file)
+**Form Fields:** 
+- `file` (required) - the georeferenced raster file
+- `world_file` (optional) - world file for JPEG/PNG formats
 
 **Supported Formats:**
-- GeoTIFF (.tif, .tiff)
-- JPEG with world file (.jpg, .jpeg + .jgw)
-- PNG with world file (.png + .pgw)
-- Any format with .wld world file
+- **GeoTIFF** (.tif, .tiff) - georeferencing embedded, no world file needed
+- **JPEG** (.jpg, .jpeg) - requires .jgw world file
+- **PNG** (.png) - requires .pgw world file
+- **Any format** - can use generic .wld world file
 
 **Max File Size:** 30GB
 
@@ -25,9 +27,14 @@ POST /projects/{project_id}/ortho
 ### Basic Upload with Progress
 
 ```javascript
-async function uploadOrtho(projectId, file) {
+async function uploadOrtho(projectId, file, worldFile = null) {
   const formData = new FormData();
   formData.append('file', file);
+  
+  // Add world file if provided (required for JPEG/PNG)
+  if (worldFile) {
+    formData.append('world_file', worldFile);
+  }
   
   try {
     const response = await fetch(`/projects/${projectId}/ortho`, {
@@ -58,26 +65,35 @@ async function uploadOrtho(projectId, file) {
   }
 }
 
-// Usage
+// Usage with GeoTIFF (no world file needed)
 const fileInput = document.getElementById('ortho-file');
 fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (file) {
     const result = await uploadOrtho('PROJ-001', file);
-    // Poll job status
     pollJobStatus(result.job_id);
   }
 });
+
+// Usage with JPEG + world file
+const orthoFile = document.getElementById('ortho-file').files[0];
+const worldFile = document.getElementById('world-file').files[0];
+const result = await uploadOrtho('PROJ-001', orthoFile, worldFile);
 ```
 
 ### With Upload Progress Bar
 
 ```javascript
-function uploadOrthoWithProgress(projectId, file, onProgress) {
+function uploadOrthoWithProgress(projectId, file, worldFile, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('file', file);
+    
+    // Add world file if provided
+    if (worldFile) {
+      formData.append('world_file', worldFile);
+    }
     
     // Track upload progress
     xhr.upload.addEventListener('progress', (e) => {
@@ -108,7 +124,10 @@ function uploadOrthoWithProgress(projectId, file, onProgress) {
 
 // Usage
 const progressBar = document.getElementById('progress-bar');
-const result = await uploadOrthoWithProgress('PROJ-001', file, (percent) => {
+const orthoFile = document.getElementById('ortho-file').files[0];
+const worldFile = document.getElementById('world-file').files[0]; // optional
+
+const result = await uploadOrthoWithProgress('PROJ-001', orthoFile, worldFile, (percent) => {
   progressBar.style.width = `${percent}%`;
   progressBar.textContent = `${Math.round(percent)}%`;
 });
@@ -152,6 +171,64 @@ pollJobStatus(result.job_id, (job) => {
 
 ---
 
+## World Files Explained
+
+### What is a World File?
+
+A world file is a small text file that provides georeferencing information for image formats that don't support embedded metadata (like JPEG and PNG).
+
+### When Do You Need a World File?
+
+- **GeoTIFF** (.tif, .tiff) → **NO** - georeferencing is embedded
+- **JPEG** (.jpg, .jpeg) → **YES** - requires .jgw file
+- **PNG** (.png) → **YES** - requires .pgw file
+
+### World File Extensions
+
+- `.jgw` or `.jpgw` - JPEG World File
+- `.pgw` or `.pngw` - PNG World File  
+- `.wld` - Generic World File (works with any format)
+
+### Example: Uploading JPEG with World File
+
+```html
+<input type="file" id="ortho-file" accept=".jpg,.jpeg,.tif,.tiff,.png" />
+<input type="file" id="world-file" accept=".jgw,.pgw,.wld" />
+<button onclick="uploadFiles()">Upload</button>
+
+<script>
+async function uploadFiles() {
+  const orthoFile = document.getElementById('ortho-file').files[0];
+  const worldFile = document.getElementById('world-file').files[0];
+  
+  // Check if world file is needed
+  const needsWorldFile = orthoFile.name.match(/\.(jpg|jpeg|png)$/i);
+  
+  if (needsWorldFile && !worldFile) {
+    alert('Please select a world file (.jgw, .pgw, or .wld)');
+    return;
+  }
+  
+  const formData = new FormData();
+  formData.append('file', orthoFile);
+  
+  if (worldFile) {
+    formData.append('world_file', worldFile);
+  }
+  
+  const response = await fetch('/projects/PROJ-001/ortho', {
+    method: 'POST',
+    body: formData
+  });
+  
+  const result = await response.json();
+  console.log('Upload started:', result);
+}
+</script>
+```
+
+---
+
 ## React Example
 
 ### Upload Component
@@ -161,6 +238,7 @@ import { useState } from 'react';
 
 function OrthoUpload({ projectId, onUploadComplete }) {
   const [file, setFile] = useState(null);
+  const [worldFile, setWorldFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [jobStatus, setJobStatus] = useState(null);
@@ -187,11 +265,42 @@ function OrthoUpload({ projectId, onUploadComplete }) {
       
       setFile(selectedFile);
       setError(null);
+      
+      // Check if world file is needed
+      const needsWorldFile = fileExt.match(/\.(jpg|jpeg|png)$/i);
+      if (needsWorldFile && !worldFile) {
+        setError('This file format requires a world file (.jgw, .pgw, or .wld)');
+      }
+    }
+  };
+  
+  const handleWorldFileChange = (e) => {
+    const selectedWorldFile = e.target.files[0];
+    if (selectedWorldFile) {
+      const validExtensions = ['.jgw', '.pgw', '.wld', '.jpgw', '.pngw'];
+      const fileExt = selectedWorldFile.name.toLowerCase().match(/\.[^.]+$/)?.[0];
+      
+      if (!validExtensions.includes(fileExt)) {
+        setError(`Invalid world file type. Supported: ${validExtensions.join(', ')}`);
+        return;
+      }
+      
+      setWorldFile(selectedWorldFile);
+      setError(null);
     }
   };
   
   const uploadFile = () => {
     if (!file) return;
+    
+    // Check if world file is required
+    const fileExt = file.name.toLowerCase().match(/\.[^.]+$/)?.[0];
+    const needsWorldFile = fileExt.match(/\.(jpg|jpeg|png)$/i);
+    
+    if (needsWorldFile && !worldFile) {
+      setError('World file required for JPEG/PNG formats');
+      return;
+    }
     
     setUploading(true);
     setError(null);
@@ -199,6 +308,10 @@ function OrthoUpload({ projectId, onUploadComplete }) {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('file', file);
+    
+    if (worldFile) {
+      formData.append('world_file', worldFile);
+    }
     
     // Upload progress
     xhr.upload.addEventListener('progress', (e) => {
@@ -256,17 +369,33 @@ function OrthoUpload({ projectId, onUploadComplete }) {
     <div className="ortho-upload">
       <h3>Upload Orthophoto</h3>
       
-      <input
-        type="file"
-        accept=".tif,.tiff,.jpg,.jpeg,.png"
-        onChange={handleFileChange}
-        disabled={uploading}
-      />
+      <div>
+        <label>Ortho File:</label>
+        <input
+          type="file"
+          accept=".tif,.tiff,.jpg,.jpeg,.png"
+          onChange={handleFileChange}
+          disabled={uploading}
+        />
+      </div>
+      
+      {file && file.name.match(/\.(jpg|jpeg|png)$/i) && (
+        <div>
+          <label>World File (required for JPEG/PNG):</label>
+          <input
+            type="file"
+            accept=".jgw,.pgw,.wld,.jpgw,.pngw"
+            onChange={handleWorldFileChange}
+            disabled={uploading}
+          />
+        </div>
+      )}
       
       {file && (
         <div className="file-info">
           <p>Selected: {file.name}</p>
           <p>Size: {(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+          {worldFile && <p>World file: {worldFile.name}</p>}
         </div>
       )}
       

@@ -208,17 +208,18 @@ class JobWorker:
     
     def _download_ortho_file(self, job_id: str, azure_path: str) -> str:
         """
-        Download ortho file from Azure to local temp directory.
+        Download ortho file (and optional world file) from Azure to local temp directory.
         
-        Downloads the file from Azure storage and saves it to a local temporary
-        directory for processing. Preserves the original file extension.
+        Downloads the main file from Azure storage and saves it to a local temporary
+        directory for processing. If a world file exists in Azure (with same job_id but
+        different extension), it will also be downloaded to the same directory.
         
         Args:
             job_id: ID of the job whose file should be downloaded
             azure_path: Azure blob path (e.g., "jobs/{job_id}.tif")
             
         Returns:
-            Local file path where the file was saved
+            Local file path where the main file was saved
             
         Raises:
             Exception: If download fails
@@ -236,10 +237,27 @@ class JobWorker:
             file_ext = os.path.splitext(azure_path)[1] or '.tif'
             local_file_path = os.path.join(temp_dir, f"{job_id}{file_ext}")
             
-            # Download from Azure
+            # Download main file from Azure
             self.db.az.download_file(azure_path, local_file_path)
-            
             logger.info(f"Job {job_id}: Downloaded ortho file to {local_file_path}")
+            
+            # Check for and download world file if it exists
+            # World files have extensions: .jgw, .pgw, .wld, .jpgw, .pngw
+            world_extensions = ['.jgw', '.pgw', '.wld', '.jpgw', '.pngw']
+            
+            for world_ext in world_extensions:
+                world_blob_name = f"jobs/{job_id}{world_ext}"
+                world_file_path = os.path.join(temp_dir, f"{job_id}{world_ext}")
+                
+                try:
+                    # Try to download world file (will fail silently if doesn't exist)
+                    self.db.az.download_file(world_blob_name, world_file_path)
+                    logger.info(f"Job {job_id}: Downloaded world file to {world_file_path}")
+                    break  # Found and downloaded world file, stop looking
+                except Exception:
+                    # World file doesn't exist with this extension, try next
+                    continue
+            
             return local_file_path
             
         except Exception as e:
@@ -616,11 +634,12 @@ class JobWorker:
     
     def _cleanup_ortho_files(self, job_id: str, *file_paths):
         """
-        Clean up local temporary files and Azure job file for ortho processing.
+        Clean up local temporary files and Azure job files for ortho processing.
         
         This method accepts a variable number of file paths and attempts to delete
-        each one. It also deletes the Azure job file. All operations are wrapped
-        in error handling to ensure failures don't prevent other cleanup operations.
+        each one. It also deletes the Azure job file and any associated world files.
+        All operations are wrapped in error handling to ensure failures don't prevent
+        other cleanup operations.
         
         Args:
             job_id: Job ID for the Azure job file cleanup
@@ -637,12 +656,23 @@ class JobWorker:
                 except Exception as e:
                     logger.error(f"Job {job_id}: Failed to delete {file_path}: {e}")
         
-        # Delete Azure job file
+        # Delete Azure job file (main file)
         try:
             self.db.az.delete_job_file(job_id)
             logger.info(f"Job {job_id}: Deleted Azure job file")
         except Exception as e:
             logger.error(f"Job {job_id}: Failed to delete Azure job file: {e}")
+        
+        # Delete Azure world files if they exist
+        world_extensions = ['.jgw', '.pgw', '.wld', '.jpgw', '.pngw']
+        for world_ext in world_extensions:
+            try:
+                world_blob_name = f"jobs/{job_id}{world_ext}"
+                self.db.az.delete_blob(world_blob_name)
+                logger.info(f"Job {job_id}: Deleted Azure world file: {world_blob_name}")
+            except Exception:
+                # World file doesn't exist, ignore
+                pass
         
         logger.info(f"Job {job_id}: Ortho file cleanup completed")
     

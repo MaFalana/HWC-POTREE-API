@@ -11,27 +11,33 @@ import subprocess
 import logging
 from pathlib import Path
 from typing import Dict, List
+from pyproj import Transformer, CRS
 
 logger = logging.getLogger(__name__)
 
 
-def _run(cmd: List[str]) -> str:
+def _run(cmd: List[str], timeout: int = 3600) -> str:
     """
     Run a command and return stdout.
     
     Args:
         cmd: Command and arguments as a list
+        timeout: Maximum time in seconds to wait (default: 3600 = 1 hour)
         
     Returns:
         Command stdout as string
         
     Raises:
         RuntimeError: If command fails
+        subprocess.TimeoutExpired: If command times out
     """
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{p.stderr}")
-    return p.stdout
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if p.returncode != 0:
+            raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{p.stderr}")
+        return p.stdout
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Command timed out after {timeout} seconds: {' '.join(cmd)}")
 
 
 def raster_to_leaflet_overlay(
@@ -42,10 +48,12 @@ def raster_to_leaflet_overlay(
     Convert a georeferenced raster into a transparent PNG and return Leaflet bounds.
     
     This function:
-    1. Reprojects the raster to EPSG:4326 (WGS84)
-    2. Adds alpha channel for transparency
-    3. Converts to PNG with maximum compression
-    4. Extracts corner coordinates as Leaflet bounds
+    1. Extracts bounds from the original raster (in native CRS)
+    2. Transforms corner coordinates to EPSG:4326 (WGS84) for Leaflet
+    3. Converts to PNG with alpha transparency (no reprojection)
+    
+    Note: The PNG will be in the original projection, but Leaflet bounds are in WGS84.
+    This works well for most use cases and is much faster than full reprojection.
     
     Supported input formats:
     - GeoTIFF (.tif, .tiff)
@@ -72,55 +80,87 @@ def raster_to_leaflet_overlay(
     
     input_path = str(Path(input_path))
     output_png = str(Path(output_png))
-    tmp = str(Path(output_png).with_suffix(".warp.tif"))
     
     try:
-        # Step 1: Reproject to EPSG:4326 with alpha channel
-        logger.info("Reprojecting to EPSG:4326 with alpha channel")
-        _run([
-            "gdalwarp",
-            "-t_srs", "EPSG:4326",
-            "-dstalpha",
-            "-r", "cubic",
-            input_path,
-            tmp
-        ])
-        
-        # Step 2: Convert to PNG with compression
-        logger.info("Converting to PNG format")
-        _run([
-            "gdal_translate",
-            "-of", "PNG",
-            "-co", "ZLEVEL=9",
-            tmp,
-            output_png
-        ])
-        
-        # Step 3: Extract bounds from warped file
+        # Step 1: Get raster info and extract bounds in native CRS
         logger.info("Extracting bounds from georeferenced raster")
-        info = json.loads(_run(["gdalinfo", "-json", tmp]))
+        info = json.loads(_run(["gdalinfo", "-json", input_path]))
+        
+        # Check for georeferencing
         corners = info.get("cornerCoordinates")
         if not corners:
             raise RuntimeError("Input raster has no georeferencing.")
         
-        ul = corners["upperLeft"]
+        # Get corner coordinates in native CRS
+        ul = corners["upperLeft"]  # [x, y] or [lon, lat]
+        ur = corners["upperRight"]
+        ll = corners["lowerLeft"]
         lr = corners["lowerRight"]
         
-        west, north = ul
-        east, south = lr
+        # Get the source CRS
+        wkt = info.get("coordinateSystem", {}).get("wkt")
+        if not wkt:
+            raise RuntimeError("Cannot determine coordinate system of input raster.")
+        
+        # Step 2: Transform corners to EPSG:4326 if needed
+        logger.info("Transforming bounds to EPSG:4326")
+        
+        # Parse source CRS from WKT
+        try:
+            source_crs = CRS.from_wkt(wkt)
+            target_crs = CRS.from_epsg(4326)
+            
+            # Check if already in WGS84
+            if source_crs.to_epsg() == 4326:
+                logger.info("Raster already in WGS84, using bounds directly")
+                west, north = ul
+                east, south = lr
+            else:
+                # Transform coordinates using pyproj
+                logger.info(f"Transforming from {source_crs.name} to WGS84")
+                transformer = Transformer.from_crs(source_crs, target_crs, always_xy=True)
+                
+                # Transform all four corners
+                corners_native = [ul, ur, lr, ll]
+                corners_wgs84 = []
+                
+                for corner in corners_native:
+                    x, y = corner
+                    lon, lat = transformer.transform(x, y)
+                    corners_wgs84.append([lon, lat])
+                
+                # Extract bounds from transformed corners
+                lons = [c[0] for c in corners_wgs84]
+                lats = [c[1] for c in corners_wgs84]
+                
+                west = min(lons)
+                east = max(lons)
+                south = min(lats)
+                north = max(lats)
+        except Exception as e:
+            raise RuntimeError(f"Failed to transform coordinates: {e}")
         
         bounds = [[south, west], [north, east]]
-        
         logger.info(f"Extracted bounds: {bounds}")
         
-        # Clean up temporary warped file
-        Path(tmp).unlink(missing_ok=True)
+        # Step 3: Convert to PNG with alpha transparency (no reprojection)
+        logger.info("Converting to PNG format with alpha transparency")
+        _run([
+            "gdal_translate",
+            "-of", "PNG",
+            "-b", "1",
+            "-b", "2", 
+            "-b", "3",
+            "-mask", "none",
+            "-co", "ZLEVEL=9",
+            input_path,
+            output_png
+        ], timeout=600)
+        
         logger.info("Conversion completed successfully")
         
         return {"bounds": bounds}
         
     except Exception as e:
-        # Clean up temporary file on error
-        Path(tmp).unlink(missing_ok=True)
         logger.error(f"Failed to convert raster to Leaflet overlay: {e}")
         raise
