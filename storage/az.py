@@ -1,6 +1,5 @@
 import os
-from datetime import datetime, timedelta
-from azure.storage.blob import (BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions)
+from azure.storage.blob import (BlobServiceClient, ContentSettings, PublicAccess)
 
 MIME_MAP = {
     ".html": "text/html",
@@ -26,14 +25,17 @@ class AzureStorageManager:
         connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         self.container_client = self.blob_service_client.get_container_client(container_name)
+        self.container_name = container_name
+        self.account_name = self.blob_service_client.account_name
 
-        # Create private container if it doesn’t exist
+        # Create public container if it doesn't exist
         try:
             self.container_client.get_container_properties()
+            print(f"Connected to Azure container: {container_name}")
         except Exception:
-            # no public access
-            self.container_client.create_container()
-        print(f"Connected to private Azure container: {container_name}")
+            # Create container with public blob access
+            self.container_client.create_container(public_access=PublicAccess.Blob)
+            print(f"Created public Azure container: {container_name}")
 
     # ---------- Upload ----------
     def upload_file(self, file_path: str, blob_name: str):
@@ -89,14 +91,14 @@ class AzureStorageManager:
 
     def upload_thumbnail(self, project_id: str, image_data: bytes) -> str:
         """
-        Upload thumbnail PNG to {project_id}/thumbnail.png and return SAS URL.
+        Upload thumbnail PNG to {project_id}/thumbnail.png and return public URL.
         
         Args:
             project_id: The project ID
             image_data: PNG image bytes
             
         Returns:
-            SAS URL for the uploaded thumbnail
+            Public URL for the uploaded thumbnail
         """
         blob_name = f"{project_id}/thumbnail.png"
         self.upload_bytes(
@@ -106,34 +108,20 @@ class AzureStorageManager:
             overwrite=True
         )
         print(f"Uploaded thumbnail for project {project_id}")
-        return self.generate_sas_url(blob_name)
+        return self.get_public_url(blob_name)
 
-    # ---------- SAS URL Generator ----------
-    def generate_sas_url(self, blob_name: str, hours_valid: int = 720) -> str:
+    # ---------- Public URL Generator ----------
+    def get_public_url(self, blob_name: str) -> str:
         """
-        Return a time-limited SAS URL for a given blob.
+        Return the public URL for a given blob.
         
         Args:
             blob_name: Name of the blob to generate URL for
-            hours_valid: Number of hours the URL should be valid (default: 720 = 30 days)
             
         Returns:
-            SAS URL with read permissions
+            Public URL (no authentication required)
         """
-        account_name = self.blob_service_client.account_name
-        account_key = self.blob_service_client.credential.account_key
-        container_name = self.container_client.container_name
-
-        sas_token = generate_blob_sas(
-            account_name=account_name,
-            container_name=container_name,
-            blob_name=blob_name,
-            account_key=account_key,
-            permission=BlobSasPermissions(read=True),
-            expiry=datetime.utcnow() + timedelta(hours=hours_valid),
-        )
-
-        return f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
+        return f"https://{self.account_name}.blob.core.windows.net/{self.container_name}/{blob_name}"
 
     # ---------- Download / Delete ----------
     def download_file(self, blob_name: str, download_path: str):

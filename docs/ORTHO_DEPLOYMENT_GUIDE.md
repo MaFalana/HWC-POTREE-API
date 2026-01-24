@@ -273,7 +273,7 @@ Expected performance on recommended hardware:
 
 - GDAL commands run with subprocess timeout to prevent hanging
 - File validation prevents malicious uploads
-- SAS URLs expire after 30 days
+- URLs are public and permanent (no expiration)
 - Temporary files are cleaned up after processing
 - Error messages don't expose internal paths
 

@@ -101,7 +101,7 @@ class PotreeConverter:
 
     def upload_output(self, output_dir: str, project_id: str) -> str:
         """
-        Upload all Potree output files to Azure Blob Storage and return metadata.json SAS URL.
+        Upload all Potree output files to Azure Blob Storage and return metadata.json public URL.
         
         Potree Converter produces:
         - metadata.json (main metadata file)
@@ -114,7 +114,7 @@ class PotreeConverter:
             project_id: Project ID to use as blob prefix
             
         Returns:
-            SAS URL for the metadata.json file
+            Public URL for the metadata.json file
             
         Raises:
             FileNotFoundError: If output directory or metadata.json doesn't exist
@@ -139,12 +139,12 @@ class PotreeConverter:
                 logger.error(f"metadata.json not found at {metadata_path}")
                 raise FileNotFoundError(f"metadata.json not found in Potree output at {metadata_path}")
             
-            # Generate SAS URL for metadata.json
+            # Generate public URL for metadata.json
             metadata_blob = f"{project_id}/metadata.json"
-            sas_url = AZ.generate_sas_url(metadata_blob)
-            logger.info(f"Generated SAS URL for metadata.json: {metadata_blob}")
+            public_url = AZ.get_public_url(metadata_blob)
+            logger.info(f"Generated public URL for metadata.json: {metadata_blob}")
             
-            return sas_url
+            return public_url
                 
         except Exception as e:
             logger.error(f"Failed to upload Potree output: {e}", exc_info=True)

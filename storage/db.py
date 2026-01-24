@@ -582,8 +582,8 @@ class DatabaseManager:
         
         Args:
             project_id: The project ID to update
-            url: SAS URL to the ortho PNG overlay
-            thumbnail_url: Optional SAS URL to the thumbnail PNG
+            url: Public URL to the ortho PNG overlay
+            thumbnail_url: Optional public URL to the thumbnail PNG
             bounds: Optional Leaflet bounds [[south, west], [north, east]]
             
         Returns:

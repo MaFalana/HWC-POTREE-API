@@ -803,7 +803,7 @@ az monitor metrics list \
 
 - Update dependencies
 - Review and clean up old jobs
-- Check SAS URL expiration
+- Monitor storage usage
 
 **Quarterly:**
 

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import uvicorn
 
-from azure.storage.blob import (BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions)
+from azure.storage.blob import (BlobServiceClient, ContentSettings, PublicAccess)
 from pymongo import MongoClient
 from dotenv import load_dotenv
 

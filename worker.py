@@ -436,8 +436,8 @@ class JobWorker:
         Upload PNG overlay and thumbnail to Azure Blob Storage.
         
         Uploads the PNG file to {project_id}/ortho/ortho.png and optionally uploads
-        the thumbnail to {project_id}/ortho/ortho_thumbnail.png. Generates SAS URLs
-        with 30-day validity for both files.
+        the thumbnail to {project_id}/ortho/ortho_thumbnail.png. Returns public URLs
+        for both files.
         
         Args:
             project_id: Project ID for organizing files in Azure
@@ -446,7 +446,7 @@ class JobWorker:
             job_id: Job ID for logging and progress tracking
             
         Returns:
-            Dictionary with 'url' and 'thumbnail' keys containing SAS URLs
+            Dictionary with 'url' and 'thumbnail' keys containing public URLs
             
         Raises:
             Exception: If Azure upload fails
@@ -475,8 +475,8 @@ class JobWorker:
             
             logger.info(f"Job {job_id}: PNG overlay uploaded successfully")
             
-            # Generate SAS URL for PNG (30 days = 720 hours)
-            png_url = self.db.az.generate_sas_url(png_blob_name, hours_valid=720)
+            # Generate public URL for PNG
+            png_url = self.db.az.get_public_url(png_blob_name)
             
             # Upload thumbnail if it exists
             thumbnail_url = None
@@ -494,8 +494,8 @@ class JobWorker:
                 
                 logger.info(f"Job {job_id}: Thumbnail uploaded successfully")
                 
-                # Generate SAS URL for thumbnail (30 days = 720 hours)
-                thumbnail_url = self.db.az.generate_sas_url(thumbnail_blob_name, hours_valid=720)
+                # Generate public URL for thumbnail
+                thumbnail_url = self.db.az.get_public_url(thumbnail_blob_name)
             else:
                 logger.info(f"Job {job_id}: No thumbnail to upload")
             
@@ -521,7 +521,7 @@ class JobWorker:
         
         Args:
             project_id: ID of the project to update
-            ortho_urls: Dictionary with 'url' and 'thumbnail' keys containing SAS URLs
+            ortho_urls: Dictionary with 'url' and 'thumbnail' keys containing public URLs
             bounds: Leaflet bounds [[south, west], [north, east]]
             job_id: Job ID for logging
             
@@ -1023,8 +1023,8 @@ class JobWorker:
                     overwrite=True
                 )
                 
-                # Generate SAS URL for thumbnail (30 days validity)
-                thumbnail_url = self.db.az.generate_sas_url(thumbnail_blob_name, hours_valid=720)
+                # Generate public URL for thumbnail
+                thumbnail_url = self.db.az.get_public_url(thumbnail_blob_name)
                 project.thumbnail = thumbnail_url
                 
                 logger.info(f"Job {job.id}: Thumbnail uploaded successfully")
@@ -1131,7 +1131,7 @@ class JobWorker:
             project_id: Project ID for organizing files in Azure
             
         Returns:
-            SAS URL for the main viewer HTML file
+            Public URL for the main viewer HTML file
         """
         logger.info(f"Uploading Potree output from {output_dir} to Azure")
         
@@ -1167,13 +1167,13 @@ class JobWorker:
                 
                 logger.debug(f"Uploaded {blob_name}")
         
-        # Generate SAS URL for the main viewer file
-        # Potree typically creates a metadata.json or viewer.html (30 days validity)
+        # Generate public URL for the main viewer file
+        # Potree typically creates a metadata.json or viewer.html
         viewer_blob = f"{project_id}/metadata.json"
-        sas_url = self.db.az.generate_sas_url(viewer_blob, hours_valid=720)
+        public_url = self.db.az.get_public_url(viewer_blob)
         
-        logger.info(f"Potree output uploaded successfully, viewer URL: {sas_url}")
-        return sas_url
+        logger.info(f"Potree output uploaded successfully, viewer URL: {public_url}")
+        return public_url
     
     def mark_failed(self, job: Job, error_message: str):
         """

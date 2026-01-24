@@ -152,9 +152,9 @@ Tests covered:
 
 Tests covered:
 
-- SAS URL generation
-- 30-day expiration
-- Read-only permissions
+- Public URL generation
+- Permanent URLs (no expiration)
+- Read-only public access
 - URL security
 - Error message sanitization
 

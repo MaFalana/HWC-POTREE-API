@@ -255,8 +255,9 @@ curl "http://localhost:8000/projects/PROJ-001"
 #   "_id": "PROJ-001",
 #   "name": "Highway Survey",
 #   "ortho": {
-#     "file": "https://storage.blob.core.windows.net/.../ortho.tif?sas_token",
-#     "thumbnail": "https://storage.blob.core.windows.net/.../ortho_thumbnail.png?sas_token"
+#     "url": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho.png",
+#     "thumbnail": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho_thumbnail.png",
+#     "bounds": [[south, west], [north, east]]
 #   }
 # }
 ```
@@ -497,23 +498,22 @@ hwc-potree/
 
 ---
 
-### SAS URL Expiration
+### Public URLs
 
-- **Validity Period:** 30 days (720 hours)
-- **Permissions:** Read-only
-- **Refresh:** Use `GET /projects/{id}` to get fresh URLs
+All file URLs are **public and permanent** - they never expire!
 
-**Checking Expiration:**
+- **Format:** `https://{account}.blob.core.windows.net/{container}/{blob-path}`
+- **Permissions:** Public read access
+- **Expiration:** None - URLs are permanent
+
+**Example:**
 
 ```javascript
-function isSASURLExpired(url: string): boolean {
-  const urlObj = new URL(url);
-  const se = urlObj.searchParams.get("se"); // Expiry time
-  if (!se) return false;
+// URLs are simple and permanent
+const url = "https://storage.blob.core.windows.net/container/project-id/metadata.json";
 
-  const expiryDate = new Date(se);
-  return expiryDate < new Date();
-}
+// No expiration checking needed
+fetch(url).then(response => response.json());
 ```
 
 ---
@@ -629,8 +629,9 @@ Get a specific project by ID.
   "cloud": "https://...",
   "thumbnail": "https://...",
   "ortho": {
-    "file": "https://storage.blob.core.windows.net/.../ortho.tif?sas_token",
-    "thumbnail": "https://storage.blob.core.windows.net/.../ortho_thumbnail.png?sas_token"
+    "url": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho.png",
+    "thumbnail": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho_thumbnail.png",
+    "bounds": [[south, west], [north, east]]
   },
   "location": {
     "lat": 40.7128,

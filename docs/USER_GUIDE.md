@@ -363,8 +363,9 @@ curl "https://your-api-url.com/projects/PROJ-001"
   "name": "Highway Survey",
   "client": "DOT",
   "ortho": {
-    "file": "https://storage.blob.core.windows.net/.../ortho.tif?sas_token",
-    "thumbnail": "https://storage.blob.core.windows.net/.../ortho_thumbnail.png?sas_token"
+    "url": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho.png",
+    "thumbnail": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho_thumbnail.png",
+    "bounds": [[south, west], [north, east]]
   }
 }
 ```
@@ -430,26 +431,18 @@ The thumbnail is perfect for:
 <img src="${project.ortho.thumbnail}" alt="Orthophoto preview" />
 ```
 
-### SAS URL Expiration
+### Public URLs
 
-**Important:** The URLs expire after 30 days.
+**Important:** All URLs are now public and permanent - they never expire!
 
-**Check if expired:**
+URLs are direct links to Azure Blob Storage:
 
 ```javascript
-function isSASURLExpired(url) {
-  const urlObj = new URL(url);
-  const se = urlObj.searchParams.get("se"); // Expiry time
-  if (!se) return false;
+// Example URL format
+const url = "https://storage.blob.core.windows.net/container/project-id/ortho.png";
 
-  const expiryDate = new Date(se);
-  return expiryDate < new Date();
-}
-
-// Refresh if expired
-if (isSASURLExpired(project.ortho.file)) {
-  // Fetch project again to get fresh URLs
-  const response = await fetch(
+// No expiration checking needed - URLs are permanent
+const response = await fetch(
     `https://your-api-url.com/projects/${projectId}`
   );
   project = await response.json();
@@ -709,9 +702,9 @@ gdal_translate -co COMPRESS=JPEG -co QUALITY=75 large.tif compressed.tif
 
 **Solution:**
 
-1. Check URL hasn't expired (30-day limit)
-2. Verify URL is accessible (try in browser)
-3. Check CORS settings
+1. Verify URL is accessible (try in browser)
+2. Check CORS settings
+3. Ensure Azure container is public
 4. Verify web viewer supports COG format
 5. Try with a different viewer
 
@@ -730,17 +723,17 @@ gdal_translate -co COMPRESS=JPEG -co QUALITY=75 large.tif compressed.tif
 
 ---
 
-#### Problem: SAS URL expired
+#### Problem: URL not accessible
 
-**Cause:** URLs expire after 30 days
+**Cause:** Network issue or incorrect URL
 
 **Solution:**
 
 ```javascript
-// Fetch project again to get fresh URLs
+// Verify URL is correct and accessible
 const response = await fetch(`https://your-api-url.com/projects/${projectId}`);
 const project = await response.json();
-// Use project.ortho.file with new SAS token
+// URLs are public and permanent - no expiration
 ```
 
 ---
@@ -769,7 +762,7 @@ A: Yes, the COG file URL is a direct download link. You can download it with any
 
 **Q: How long are the URLs valid?**
 
-A: SAS URLs are valid for 30 days. After that, fetch the project again to get fresh URLs.
+A: URLs are public and permanent - they never expire!
 
 ---
 

@@ -25,8 +25,8 @@ class CRS(BaseModel):
 
 
 class Ortho(BaseModel):
-    url: Optional[str] = Field(None, description="SAS URL to ortho PNG overlay")
-    thumbnail: Optional[str] = Field(None, description="SAS URL to thumbnail PNG")
+    url: Optional[str] = Field(None, description="Public URL to ortho PNG overlay")
+    thumbnail: Optional[str] = Field(None, description="Public URL to thumbnail PNG")
     bounds: Optional[List[List[float]]] = Field(None, description="Leaflet bounds [[south, west], [north, east]]")
 
     def _to_dict(self):

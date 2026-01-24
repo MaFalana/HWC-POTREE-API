@@ -13,7 +13,7 @@ A FastAPI-based backend service that processes LiDAR point cloud data (LAS/LAZ f
 - Thumbnail generation from point clouds and orthophotos
 - Potree format conversion for web visualization
 - Statistics dashboard with system-wide metrics
-- Azure Blob Storage integration with SAS URLs
+- Azure Blob Storage integration with public URLs
 - Health check endpoint for monitoring
 
 ## Workflows
@@ -294,19 +294,9 @@ Update project metadata. Accepts partial updates.
 
 **Response:** `200 OK`
 
-#### `POST /projects/{id}/refresh-urls`
+#### `GET /projects/{id}`
 
-Refresh expired SAS URLs for a project without re-processing the point cloud.
-
-**Use Case:** When SAS URLs expire after 30 days, use this endpoint to generate fresh URLs.
-
-**Response:** `200 OK`
-
-```json
-{
-  "message": "SAS URLs refreshed successfully",
-  "project_id": "XXXX-XXX-A",
-  "cloud": "https://storage.blob.core.windows.net/.../metadata.json?sv=...",
+Get a specific project by ID with all metadata including point cloud and ortho URLs.
   "thumbnail": "https://storage.blob.core.windows.net/.../thumbnail.png?sv=..."
 }
 ```
@@ -396,8 +386,9 @@ Upload an orthophoto (GeoTIFF) file for a project and start background COG conve
   "_id": "PROJ-001",
   "name": "Highway Survey",
   "ortho": {
-    "file": "https://storage.blob.core.windows.net/.../ortho.tif?sas_token",
-    "thumbnail": "https://storage.blob.core.windows.net/.../ortho_thumbnail.png?sas_token"
+    "url": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho.png",
+    "thumbnail": "https://storage.blob.core.windows.net/container/project-id/ortho/ortho_thumbnail.png",
+    "bounds": [[south, west], [north, east]]
   }
 }
 ```
@@ -992,31 +983,14 @@ async function pollJobUntilComplete(jobId, onProgress) {
 }
 ```
 
-### SAS URL Expiration
+### Public URLs
 
-SAS URLs expire after 30 days. Always check if a URL is expired before using it:
+All file URLs are **public and permanent** - they never expire!
 
 ```javascript
-function isSASURLExpired(url) {
-  try {
-    const urlObj = new URL(url);
-    const se = urlObj.searchParams.get("se"); // Expiry time
-    if (!se) return false;
-
-    const expiryDate = new Date(se);
-    return expiryDate < new Date();
-  } catch {
-    return false;
-  }
-}
-
-// Refresh project data if URL expired
-if (project.cloud && isSASURLExpired(project.cloud)) {
-  const refreshedProject = await fetch(
-    `${API_BASE_URL}/projects/${project._id}`
-  );
-  project = await refreshedProject.json();
-}
+// URLs are simple and direct - no expiration checking needed
+const url = "https://storage.blob.core.windows.net/container/project-id/metadata.json";
+fetch(url).then(response => response.json());
 ```
 
 ### Best Practices
@@ -1025,7 +999,7 @@ if (project.cloud && isSASURLExpired(project.cloud)) {
 2. **Show upload progress** for better UX
 3. **Poll job status** every 2-5 seconds (don't poll too frequently)
 4. **Handle all error cases** (404, 400, 500, network errors)
-5. **Cache project data** but refresh when SAS URLs expire
+5. **Cache project data** to avoid repeated API calls
 6. **Show processing status** to users (pending, processing, completed, failed)
 7. **Provide cancel option** for long uploads (though job will still process)
 8. **Display thumbnails** as preview before full point cloud loads
@@ -1291,31 +1265,14 @@ app.add_middleware(
 )
 ```
 
-### SAS URL Expiration
+### Public URLs
 
-SAS URLs expire after 30 days. Always check if a URL is expired before using it:
+All file URLs are **public and permanent** - they never expire!
 
 ```javascript
-function isSASURLExpired(url) {
-  try {
-    const urlObj = new URL(url);
-    const se = urlObj.searchParams.get("se"); // Expiry time
-    if (!se) return false;
-
-    const expiryDate = new Date(se);
-    return expiryDate < new Date();
-  } catch {
-    return false;
-  }
-}
-
-// Refresh project data if URL expired
-if (project.cloud && isSASURLExpired(project.cloud)) {
-  const refreshedProject = await fetch(
-    `${API_BASE_URL}/projects/${project._id}`
-  );
-  project = await refreshedProject.json();
-}
+// URLs are simple and direct - no expiration checking needed
+const url = "https://storage.blob.core.windows.net/container/project-id/metadata.json";
+fetch(url).then(response => response.json());
 ```
 
 ### Best Practices
@@ -1324,7 +1281,7 @@ if (project.cloud && isSASURLExpired(project.cloud)) {
 2. **Show upload progress** for better UX
 3. **Poll job status** every 2-5 seconds (don't poll too frequently)
 4. **Handle all error cases** (404, 400, 500, network errors)
-5. **Cache project data** but refresh when SAS URLs expire
+5. **Cache project data** to avoid repeated API calls
 6. **Show processing status** to users (pending, processing, completed, failed)
 7. **Provide cancel option** for long uploads (though job will still process)
 8. **Display thumbnails** as preview before full point cloud loads
