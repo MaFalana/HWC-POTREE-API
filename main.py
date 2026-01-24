@@ -27,7 +27,7 @@ app = FastAPI(
     description="""
     A FastAPI-based backend service for processing LiDAR point cloud data (LAS/LAZ files) 
     and converting them to Potree format for web-based 3D visualization, plus orthophoto 
-    (GeoTIFF) upload and Cloud Optimized GeoTIFF (COG) conversion.
+    (georeferenced raster) upload and PNG overlay conversion with Leaflet bounds.
     
     **File Size Limits:**
     - Maximum upload size: 30GB (Potree handles downsampling automatically)
@@ -42,7 +42,7 @@ app = FastAPI(
     * **Metadata Extraction**: Automatic extraction of CRS, location, and point count
     * **Thumbnail Generation**: Automatic preview image generation from point clouds and orthophotos
     * **Potree Conversion**: Convert LAS/LAZ files to web-viewable Potree format
-    * **Orthophoto Upload**: Upload GeoTIFF files and convert to Cloud Optimized GeoTIFF (COG) format
+    * **Orthophoto Upload**: Upload georeferenced rasters and convert to PNG overlays with Leaflet bounds
     * **Statistics Dashboard**: Real-time statistics on projects, points, and job status
     * **Azure Integration**: Seamless integration with Azure Blob Storage
     * **Health Monitoring**: Built-in health checks for production monitoring

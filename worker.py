@@ -206,15 +206,16 @@ class JobWorker:
             # Log other errors but don't stop processing
             logger.warning(f"Error checking cancellation for job {job_id}: {e}")
     
-    def _download_ortho_file(self, job_id: str) -> str:
+    def _download_ortho_file(self, job_id: str, azure_path: str) -> str:
         """
         Download ortho file from Azure to local temp directory.
         
-        Downloads the file from Azure storage at jobs/{job_id}.tif and saves it
-        to a local temporary directory for processing.
+        Downloads the file from Azure storage and saves it to a local temporary
+        directory for processing. Preserves the original file extension.
         
         Args:
             job_id: ID of the job whose file should be downloaded
+            azure_path: Azure blob path (e.g., "jobs/{job_id}.tif")
             
         Returns:
             Local file path where the file was saved
@@ -229,11 +230,14 @@ class JobWorker:
         try:
             # Create temp directory for this job
             temp_dir = tempfile.mkdtemp(prefix=f"ortho_{job_id}_")
-            local_file_path = os.path.join(temp_dir, f"{job_id}.tif")
+            
+            # Extract file extension from azure_path
+            import os
+            file_ext = os.path.splitext(azure_path)[1] or '.tif'
+            local_file_path = os.path.join(temp_dir, f"{job_id}{file_ext}")
             
             # Download from Azure
-            blob_name = f"jobs/{job_id}.tif"
-            self.db.az.download_file(blob_name, local_file_path)
+            self.db.az.download_file(azure_path, local_file_path)
             
             logger.info(f"Job {job_id}: Downloaded ortho file to {local_file_path}")
             return local_file_path
@@ -286,72 +290,51 @@ class JobWorker:
             logger.error(f"Error during GeoTIFF validation: {e}", exc_info=True)
             raise ValueError(f"Failed to validate GeoTIFF: {e}")
     
-    def _convert_to_cog(self, input_path: str, job_id: str) -> str:
+    def _convert_to_png_overlay(self, input_path: str, job_id: str) -> tuple[str, list]:
         """
-        Convert GeoTIFF to Cloud Optimized GeoTIFF (COG) format.
+        Convert georeferenced raster to PNG overlay with bounds.
         
-        Uses gdal_translate with COG driver to create an optimized GeoTIFF with:
-        - JPEG compression (quality 85)
-        - Tiling enabled (512px blocks)
-        - Optimized for streaming and partial reads
+        Uses the raster_to_leaflet_overlay utility to create a transparent PNG
+        in EPSG:4326 projection with extracted bounds for Leaflet.
         
         Args:
-            input_path: Path to the input GeoTIFF file
+            input_path: Path to the input georeferenced raster file
             job_id: Job ID for logging and progress tracking
             
         Returns:
-            Path to the output COG file
+            Tuple of (output_png_path, bounds) where bounds is [[south, west], [north, east]]
             
         Raises:
-            RuntimeError: If COG conversion fails
+            RuntimeError: If PNG conversion fails
         """
-        import subprocess
-        
-        logger.info(f"Job {job_id}: Starting COG conversion")
-        logger.info(f"Job {job_id}: Converting to COG format with JPEG compression")
+        logger.info(f"Job {job_id}: Starting PNG overlay conversion")
+        logger.info(f"Job {job_id}: Converting to PNG with EPSG:4326 bounds")
         
         # Update job progress
         self.db.update_job_status(
             job_id,
             "processing",
-            progress_message="Converting to COG"
+            progress_message="Converting to PNG overlay"
         )
         
         try:
+            from utils.ortho import raster_to_leaflet_overlay
+            
             # Create output path in same directory as input
-            # Handle both .tif and .tiff extensions (case-insensitive)
-            if input_path.lower().endswith('.tiff'):
-                output_path = input_path[:-5] + '_cog' + input_path[-5:]
-            elif input_path.lower().endswith('.tif'):
-                output_path = input_path[:-4] + '_cog' + input_path[-4:]
-            else:
-                # Fallback - should not happen due to validation
-                output_path = input_path + '_cog.tif'
+            output_path = os.path.splitext(input_path)[0] + '_overlay.png'
             
-            # Run gdal_translate with COG driver
-            result = subprocess.run([
-                'gdal_translate',
-                '-of', 'COG',
-                '-co', 'COMPRESS=JPEG',
-                '-co', 'QUALITY=85',
-                '-co', 'TILED=YES',
-                '-co', 'BLOCKSIZE=512',
-                input_path,
-                output_path
-            ], capture_output=True, text=True, timeout=3600)  # 1 hour timeout
-            
-            if result.returncode != 0:
-                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                logger.error(f"Job {job_id}: COG conversion failed: {error_msg}")
-                raise RuntimeError(f"COG conversion failed: {error_msg}")
+            # Convert raster to PNG overlay and extract bounds
+            result = raster_to_leaflet_overlay(input_path, output_path)
+            bounds = result['bounds']
             
             # Verify output file was created
             if not os.path.exists(output_path):
-                logger.error(f"Job {job_id}: COG output file not created at {output_path}")
-                raise RuntimeError("COG conversion failed: output file not created")
+                logger.error(f"Job {job_id}: PNG output file not created at {output_path}")
+                raise RuntimeError("PNG conversion failed: output file not created")
             
-            logger.info(f"Job {job_id}: COG conversion completed successfully")
+            logger.info(f"Job {job_id}: PNG overlay conversion completed successfully")
             logger.info(f"Job {job_id}: Output file: {output_path}")
+            logger.info(f"Job {job_id}: Bounds: {bounds}")
             
             # Delete original uploaded file after successful conversion
             if os.path.exists(input_path):
@@ -361,28 +344,22 @@ class JobWorker:
                 except Exception as e:
                     logger.warning(f"Job {job_id}: Failed to delete original file {input_path}: {e}")
             
-            return output_path
+            return output_path, bounds
             
-        except subprocess.TimeoutExpired:
-            logger.error(f"Job {job_id}: COG conversion timed out")
-            raise RuntimeError("COG conversion timed out after 1 hour")
-        except FileNotFoundError:
-            logger.error(f"Job {job_id}: gdal_translate command not found - GDAL may not be installed")
-            raise RuntimeError("GDAL tools not available on system")
         except Exception as e:
-            logger.error(f"Job {job_id}: Error during COG conversion: {e}", exc_info=True)
-            raise RuntimeError(f"Failed to convert to COG: {e}")
+            logger.error(f"Job {job_id}: Error during PNG conversion: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to convert to PNG overlay: {e}")
     
-    def _generate_ortho_thumbnail(self, cog_path: str, job_id: str) -> Optional[str]:
+    def _generate_ortho_thumbnail(self, png_path: str, job_id: str) -> Optional[str]:
         """
-        Generate thumbnail from COG file.
+        Generate thumbnail from PNG overlay file.
         
         Uses gdal_translate to create a PNG preview with 512px width and proportional height.
         This method is designed to be non-blocking - if thumbnail generation fails, it logs
         the error and returns None, allowing the main job to continue successfully.
         
         Args:
-            cog_path: Path to the COG file
+            png_path: Path to the PNG overlay file
             job_id: Job ID for logging and progress tracking
             
         Returns:
@@ -400,15 +377,8 @@ class JobWorker:
         )
         
         try:
-            # Create thumbnail path in same directory as COG
-            # Handle both .tif and .tiff extensions (case-insensitive)
-            if cog_path.lower().endswith('.tiff'):
-                thumbnail_path = cog_path[:-5] + '_thumbnail.png'
-            elif cog_path.lower().endswith('.tif'):
-                thumbnail_path = cog_path[:-4] + '_thumbnail.png'
-            else:
-                # Fallback - should not happen
-                thumbnail_path = cog_path + '_thumbnail.png'
+            # Create thumbnail path in same directory as PNG
+            thumbnail_path = os.path.splitext(png_path)[0] + '_thumbnail.png'
             
             # Run gdal_translate to create PNG thumbnail
             # -outsize 512 0 means 512px wide with proportional height
@@ -416,7 +386,7 @@ class JobWorker:
                 'gdal_translate',
                 '-of', 'PNG',
                 '-outsize', '512', '0',
-                cog_path,
+                png_path,
                 thumbnail_path
             ], capture_output=True, text=True, timeout=30)  # 30 second timeout
             
@@ -443,22 +413,22 @@ class JobWorker:
             logger.warning(f"Job {job_id}: Error during thumbnail generation: {e}", exc_info=True)
             return None
     
-    def _upload_ortho_to_azure(self, project_id: str, cog_path: str, thumbnail_path: Optional[str], job_id: str) -> dict:
+    def _upload_ortho_to_azure(self, project_id: str, png_path: str, thumbnail_path: Optional[str], job_id: str) -> dict:
         """
-        Upload COG and thumbnail to Azure Blob Storage.
+        Upload PNG overlay and thumbnail to Azure Blob Storage.
         
-        Uploads the COG file to {project_id}/ortho/ortho.tif and optionally uploads
+        Uploads the PNG file to {project_id}/ortho/ortho.png and optionally uploads
         the thumbnail to {project_id}/ortho/ortho_thumbnail.png. Generates SAS URLs
         with 30-day validity for both files.
         
         Args:
             project_id: Project ID for organizing files in Azure
-            cog_path: Local path to the COG file
+            png_path: Local path to the PNG overlay file
             thumbnail_path: Optional local path to the thumbnail PNG file
             job_id: Job ID for logging and progress tracking
             
         Returns:
-            Dictionary with 'file' and 'thumbnail' keys containing SAS URLs
+            Dictionary with 'url' and 'thumbnail' keys containing SAS URLs
             
         Raises:
             Exception: If Azure upload fails
@@ -473,22 +443,22 @@ class JobWorker:
         )
         
         try:
-            # Upload COG file
-            cog_blob_name = f"{project_id}/ortho/ortho.tif"
-            logger.info(f"Job {job_id}: Uploading COG to {cog_blob_name}")
+            # Upload PNG overlay file
+            png_blob_name = f"{project_id}/ortho/ortho.png"
+            logger.info(f"Job {job_id}: Uploading PNG overlay to {png_blob_name}")
             
-            with open(cog_path, 'rb') as f:
+            with open(png_path, 'rb') as f:
                 self.db.az.upload_bytes(
                     data=f.read(),
-                    blob_name=cog_blob_name,
-                    content_type="image/tiff",
+                    blob_name=png_blob_name,
+                    content_type="image/png",
                     overwrite=True
                 )
             
-            logger.info(f"Job {job_id}: COG uploaded successfully")
+            logger.info(f"Job {job_id}: PNG overlay uploaded successfully")
             
-            # Generate SAS URL for COG (30 days = 720 hours)
-            cog_url = self.db.az.generate_sas_url(cog_blob_name, hours_valid=720)
+            # Generate SAS URL for PNG (30 days = 720 hours)
+            png_url = self.db.az.generate_sas_url(png_blob_name, hours_valid=720)
             
             # Upload thumbnail if it exists
             thumbnail_url = None
@@ -512,7 +482,7 @@ class JobWorker:
                 logger.info(f"Job {job_id}: No thumbnail to upload")
             
             result = {
-                'file': cog_url,
+                'url': png_url,
                 'thumbnail': thumbnail_url
             }
             
@@ -523,24 +493,25 @@ class JobWorker:
             logger.error(f"Job {job_id}: Failed to upload ortho to Azure storage: {e}", exc_info=True)
             raise Exception(f"Failed to upload ortho to Azure storage: {e}")
     
-    def _update_project_ortho(self, project_id: str, ortho_urls: dict, job_id: str) -> None:
+    def _update_project_ortho(self, project_id: str, ortho_urls: dict, bounds: list, job_id: str) -> None:
         """
-        Update project document with ortho URLs.
+        Update project document with ortho URLs and bounds.
         
         Retrieves the project from the database, creates an Ortho object with the
-        provided URLs, updates the project's ortho field, and saves it back to the
-        database.
+        provided URLs and bounds, updates the project's ortho field, and saves it
+        back to the database.
         
         Args:
             project_id: ID of the project to update
-            ortho_urls: Dictionary with 'file' and 'thumbnail' keys containing SAS URLs
+            ortho_urls: Dictionary with 'url' and 'thumbnail' keys containing SAS URLs
+            bounds: Leaflet bounds [[south, west], [north, east]]
             job_id: Job ID for logging
             
         Raises:
             ValueError: If project is not found
             Exception: If database update fails
         """
-        logger.info(f"Job {job_id}: Updating project {project_id} with ortho URLs")
+        logger.info(f"Job {job_id}: Updating project {project_id} with ortho URLs and bounds")
         
         try:
             # Get project from database
@@ -549,18 +520,20 @@ class JobWorker:
                 logger.error(f"Job {job_id}: Project {project_id} not found")
                 raise ValueError(f"Project {project_id} not found")
             
-            # Create Ortho object with URLs
+            # Create Ortho object with URLs and bounds
             from models.Project import Ortho
             project.ortho = Ortho(
-                file=ortho_urls['file'],
-                thumbnail=ortho_urls.get('thumbnail')  # Use .get() since thumbnail is optional
+                url=ortho_urls['url'],
+                thumbnail=ortho_urls.get('thumbnail'),  # Use .get() since thumbnail is optional
+                bounds=bounds
             )
             
             # Update project in database
             self.db.updateProject(project)
             
-            logger.info(f"Job {job_id}: Successfully updated project {project_id} with ortho URLs")
-            logger.info(f"Job {job_id}: Ortho file URL: {ortho_urls['file']}")
+            logger.info(f"Job {job_id}: Successfully updated project {project_id} with ortho data")
+            logger.info(f"Job {job_id}: Ortho URL: {ortho_urls['url']}")
+            logger.info(f"Job {job_id}: Bounds: {bounds}")
             if ortho_urls.get('thumbnail'):
                 logger.info(f"Job {job_id}: Ortho thumbnail URL: {ortho_urls['thumbnail']}")
             else:
@@ -570,8 +543,8 @@ class JobWorker:
             # Re-raise ValueError for project not found
             raise
         except Exception as e:
-            logger.error(f"Job {job_id}: Failed to update project {project_id} with ortho URLs: {e}", exc_info=True)
-            raise Exception(f"Failed to update project with ortho URLs: {e}")
+            logger.error(f"Job {job_id}: Failed to update project {project_id} with ortho data: {e}", exc_info=True)
+            raise Exception(f"Failed to update project with ortho data: {e}")
     
     def _cleanup_cancelled_job(self, job: Job, output_dir: Optional[str] = None):
         """
@@ -778,12 +751,12 @@ class JobWorker:
         3. Check cancellation
         4. Validate GeoTIFF with gdalinfo
         5. Check cancellation
-        6. Convert to COG format
+        6. Convert to PNG overlay and extract bounds
         7. Check cancellation
         8. Generate thumbnail (optional)
         9. Check cancellation
-        10. Upload COG and thumbnail to Azure
-        11. Update project with ortho URLs
+        10. Upload PNG and thumbnail to Azure
+        11. Update project with ortho URLs and bounds
         12. Mark job as completed
         13. Cleanup temporary files
         
@@ -794,8 +767,9 @@ class JobWorker:
             job: Job object to process (must have type "ortho_conversion")
         """
         local_file = None
-        cog_file = None
+        png_file = None
         thumbnail_file = None
+        bounds = None
         
         try:
             logger.info(f"Job {job.id}: Starting ortho processing for project {job.project_id}")
@@ -809,13 +783,13 @@ class JobWorker:
             
             # Step 1: Download ortho file from Azure
             logger.info(f"Job {job.id}: Downloading ortho file")
-            local_file = self._download_ortho_file(job.id)
+            local_file = self._download_ortho_file(job.id, job.azure_path)
             
             # Check cancellation
             self._check_cancellation(job.id)
             
-            # Step 2: Validate GeoTIFF
-            logger.info(f"Job {job.id}: Validating GeoTIFF")
+            # Step 2: Validate georeferenced raster
+            logger.info(f"Job {job.id}: Validating georeferenced raster")
             self.db.update_job_status(
                 job.id,
                 "processing",
@@ -826,27 +800,27 @@ class JobWorker:
             # Check cancellation
             self._check_cancellation(job.id)
             
-            # Step 3: Convert to COG
-            logger.info(f"Job {job.id}: Converting to COG")
-            cog_file = self._convert_to_cog(local_file, job.id)
+            # Step 3: Convert to PNG overlay and extract bounds
+            logger.info(f"Job {job.id}: Converting to PNG overlay")
+            png_file, bounds = self._convert_to_png_overlay(local_file, job.id)
             
             # Check cancellation
             self._check_cancellation(job.id)
             
             # Step 4: Generate thumbnail (optional)
             logger.info(f"Job {job.id}: Generating thumbnail")
-            thumbnail_file = self._generate_ortho_thumbnail(cog_file, job.id)
+            thumbnail_file = self._generate_ortho_thumbnail(png_file, job.id)
             
             # Check cancellation
             self._check_cancellation(job.id)
             
             # Step 5: Upload to Azure
             logger.info(f"Job {job.id}: Uploading to Azure")
-            ortho_urls = self._upload_ortho_to_azure(job.project_id, cog_file, thumbnail_file, job.id)
+            ortho_urls = self._upload_ortho_to_azure(job.project_id, png_file, thumbnail_file, job.id)
             
-            # Step 6: Update project with ortho URLs
+            # Step 6: Update project with ortho URLs and bounds
             logger.info(f"Job {job.id}: Updating project")
-            self._update_project_ortho(job.project_id, ortho_urls, job.id)
+            self._update_project_ortho(job.project_id, ortho_urls, bounds, job.id)
             
             # Step 7: Mark job as completed
             self.db.update_job_status(
@@ -858,7 +832,7 @@ class JobWorker:
             logger.info(f"Job {job.id}: Ortho processing completed successfully")
             
             # Step 8: Cleanup temporary files
-            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
             
         except CancellationException as e:
             # Handle job cancellation
@@ -866,7 +840,7 @@ class JobWorker:
             self._handle_ortho_cancellation(job)
             
             # Cleanup files
-            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
             
         except Exception as e:
             # Handle general errors
@@ -874,7 +848,7 @@ class JobWorker:
             self._handle_ortho_error(job, e)
             
             # Cleanup files
-            self._cleanup_ortho_files(job.id, local_file, cog_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
     
     def _handle_cancellation(self, job: Job, output_dir: Optional[str] = None):
         """

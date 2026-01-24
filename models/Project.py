@@ -25,8 +25,9 @@ class CRS(BaseModel):
 
 
 class Ortho(BaseModel):
-    file: Optional[str] = Field(None, description="SAS URL to COG file")
+    url: Optional[str] = Field(None, description="SAS URL to ortho PNG overlay")
     thumbnail: Optional[str] = Field(None, description="SAS URL to thumbnail PNG")
+    bounds: Optional[List[List[float]]] = Field(None, description="Leaflet bounds [[south, west], [north, east]]")
 
     def _to_dict(self):
         return self.dict()
@@ -44,7 +45,7 @@ class Project(BaseModel):
     description: Optional[str] = Field(None, description="Project description or notes")
     thumbnail: Optional[str] = Field(None, description="URL to thumbnail or preview image")
     point_count: Optional[int] = Field(None, description="Total number of points in the point cloud")
-    ortho: Optional[Ortho] = Field(None, description="Orthophoto COG and thumbnail URLs")
+    ortho: Optional[Ortho] = Field(None, description="Orthophoto PNG overlay with bounds and thumbnail")
 
     def _to_dict(self):
         result = self.dict(by_alias=True)

@@ -623,7 +623,7 @@ async def batch_delete_projects(project_ids: List[str]):
     '/{project_id}/ortho',
     status_code=202,
     summary="Upload orthophoto for project",
-    description="Upload a GeoTIFF file for a project. The file will be converted to Cloud Optimized GeoTIFF (COG) format.",
+    description="Upload a georeferenced raster file for a project. The file will be converted to a PNG overlay with bounds for Leaflet.",
     response_description="Job created for ortho conversion"
 )
 async def upload_ortho(
@@ -631,20 +631,26 @@ async def upload_ortho(
     file: UploadFile = File(...)
 ):
     """
-    Upload an orthophoto (GeoTIFF) file for a project.
+    Upload an orthophoto (georeferenced raster) file for a project.
     
     The uploaded file will be:
-    1. Validated for correct file extension (.tif or .tiff)
+    1. Validated for correct file extension
     2. Uploaded to Azure temporary storage
-    3. Queued for conversion to Cloud Optimized GeoTIFF (COG) format
+    3. Queued for conversion to PNG overlay with EPSG:4326 bounds
     4. Processed to generate a thumbnail preview
     5. Stored in the project's Azure storage location
+    
+    **Supported Formats:**
+    - GeoTIFF (.tif, .tiff)
+    - JPEG with world file (.jpg, .jpeg + .jgw)
+    - PNG with world file (.png + .pgw)
+    - Any format with .wld world file
     
     **Path Parameters:**
     - **project_id**: Project identifier
     
     **Form Parameters:**
-    - **file**: GeoTIFF file (.tif or .tiff, max 30GB)
+    - **file**: Georeferenced raster file (max 30GB)
     
     **Returns:**
     - 202 Accepted: File uploaded and job created
@@ -671,7 +677,7 @@ async def upload_ortho(
     
     **Notes:**
     - Uploading a new ortho will overwrite any existing ortho for the project
-    - Processing time varies based on file size (typically 5-30 minutes)
+    - Processing time varies based on file size (typically 2-15 minutes)
     - The job can be cancelled using POST /jobs/{job_id}/cancel
     """
     from fastapi import HTTPException
@@ -698,13 +704,14 @@ async def upload_ortho(
                 detail="No file provided"
             )
         
-        # Validate file extension
+        # Validate file extension - support GeoTIFF, JPG, PNG
         filename = file.filename.lower()
-        if not (filename.endswith('.tif') or filename.endswith('.tiff')):
+        valid_extensions = ('.tif', '.tiff', '.jpg', '.jpeg', '.png')
+        if not filename.endswith(valid_extensions):
             logger.warning(f"Invalid file extension for ortho upload: {filename}")
             raise HTTPException(
                 status_code=400,
-                detail="Invalid file type. Only .tif and .tiff files are supported"
+                detail=f"Invalid file type. Supported formats: {', '.join(valid_extensions)}"
             )
         
         # Validate file size (30GB limit)
@@ -725,16 +732,25 @@ async def upload_ortho(
         # Generate job ID
         job_id = str(uuid.uuid4())
         
+        # Determine file extension for temp file
+        file_ext = '.tif'  # default
+        if filename.endswith('.tiff'):
+            file_ext = '.tiff'
+        elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+            file_ext = '.jpg'
+        elif filename.endswith('.png'):
+            file_ext = '.png'
+        
         # Save file to temporary location
-        temp_file_path = os.path.join(tempfile.gettempdir(), f"{job_id}.tif")
+        temp_file_path = os.path.join(tempfile.gettempdir(), f"{job_id}{file_ext}")
         with open(temp_file_path, "wb") as temp_file:
             content = await file.read()
             temp_file.write(content)
         
         logger.info(f"Saved ortho file to temporary location: {temp_file_path}")
         
-        # Upload to Azure temporary storage
-        azure_blob_name = f"jobs/{job_id}.tif"
+        # Upload to Azure temporary storage with correct extension
+        azure_blob_name = f"jobs/{job_id}{file_ext}"
         DB.az.upload_file(temp_file_path, azure_blob_name)
         logger.info(f"Uploaded ortho to Azure: {azure_blob_name}")
         

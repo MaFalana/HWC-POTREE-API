@@ -576,22 +576,24 @@ class DatabaseManager:
 
     # Ortho Management Methods
 
-    def update_project_ortho(self, project_id: str, file_url: str, thumbnail_url: Optional[str] = None) -> bool:
+    def update_project_ortho(self, project_id: str, url: str, thumbnail_url: Optional[str] = None, bounds: Optional[List[List[float]]] = None) -> bool:
         """
-        Update project with ortho URLs
+        Update project with ortho URLs and bounds
         
         Args:
             project_id: The project ID to update
-            file_url: SAS URL to the COG file
+            url: SAS URL to the ortho PNG overlay
             thumbnail_url: Optional SAS URL to the thumbnail PNG
+            bounds: Optional Leaflet bounds [[south, west], [north, east]]
             
         Returns:
             bool: True if project was updated successfully, False if project not found
         """
         # Build the ortho object
         ortho_data = {
-            'file': file_url,
-            'thumbnail': thumbnail_url
+            'url': url,
+            'thumbnail': thumbnail_url,
+            'bounds': bounds
         }
         
         # Update the project document
