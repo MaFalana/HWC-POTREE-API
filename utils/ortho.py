@@ -148,27 +148,30 @@ def raster_to_leaflet_overlay(
         bounds = [[south, west], [north, east]]
         logger.info(f"Extracted bounds: {bounds}")
         
-        # Step 3: Convert to PNG with alpha transparency
-        # First check if source has nodata values or alpha channel
-        logger.info("Converting to PNG format with alpha transparency")
+        # Step 3: Convert to PNG with tiled processing and fast compression
+        # Tiled processing reduces memory usage for large images
+        logger.info("Converting to PNG format with tiled processing")
         
         # Check if source has alpha band or nodata values
         has_alpha = info.get("bands", [{}])[-1].get("colorInterpretation") == "Alpha"
         nodata_value = info.get("bands", [{}])[0].get("noDataValue")
         
         if has_alpha:
-            # Source already has alpha, just convert
-            logger.info("Source has alpha channel, converting directly")
+            # Source already has alpha, just convert with tiling
+            logger.info("Source has alpha channel, converting with tiled processing")
             _run([
                 "gdal_translate",
                 "-of", "PNG",
-                "-co", "ZLEVEL=9",
+                "-co", "TILED=YES",
+                "-co", "BLOCKXSIZE=512",
+                "-co", "BLOCKYSIZE=512",
+                "-co", "ZLEVEL=1",  # Fast compression to reduce memory usage
                 input_path,
                 output_png
-            ], timeout=600)
+            ], timeout=1800)  # 30 minute timeout for large files
         elif nodata_value is not None:
-            # Source has nodata value, convert to alpha
-            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel")
+            # Source has nodata value, convert to alpha with tiling
+            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel with tiled processing")
             _run([
                 "gdal_translate",
                 "-of", "PNG",
@@ -176,20 +179,26 @@ def raster_to_leaflet_overlay(
                 "-b", "2",
                 "-b", "3",
                 "-b", "mask",
-                "-co", "ZLEVEL=9",
+                "-co", "TILED=YES",
+                "-co", "BLOCKXSIZE=512",
+                "-co", "BLOCKYSIZE=512",
+                "-co", "ZLEVEL=1",
                 input_path,
                 output_png
-            ], timeout=600)
+            ], timeout=1800)
         else:
-            # No nodata or alpha, convert as-is (no transparency)
-            logger.info("Source has no nodata or alpha, converting without transparency")
+            # No nodata or alpha, convert as-is with tiling
+            logger.info("Source has no nodata or alpha, converting with tiled processing")
             _run([
                 "gdal_translate",
                 "-of", "PNG",
-                "-co", "ZLEVEL=9",
+                "-co", "TILED=YES",
+                "-co", "BLOCKXSIZE=512",
+                "-co", "BLOCKYSIZE=512",
+                "-co", "ZLEVEL=1",
                 input_path,
                 output_png
-            ], timeout=600)
+            ], timeout=1800)
         
         logger.info("Conversion completed successfully")
         
