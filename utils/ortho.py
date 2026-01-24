@@ -32,9 +32,14 @@ def _run(cmd: List[str], timeout: int = 3600) -> str:
         subprocess.TimeoutExpired: If command times out
     """
     try:
+        logger.debug(f"Running command: {' '.join(cmd)}")
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if p.returncode != 0:
-            raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{p.stderr}")
+            error_msg = p.stderr.strip() if p.stderr else "No error message"
+            logger.error(f"Command failed with return code {p.returncode}")
+            logger.error(f"STDOUT: {p.stdout}")
+            logger.error(f"STDERR: {error_msg}")
+            raise RuntimeError(f"Command failed: {' '.join(cmd)}\nReturn code: {p.returncode}\nSTDERR: {error_msg}\nSTDOUT: {p.stdout}")
         return p.stdout
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"Command timed out after {timeout} seconds: {' '.join(cmd)}")
