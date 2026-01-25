@@ -19,6 +19,9 @@ load_dotenv()
 
 print("Environment variables loaded.\n")
 
+# Ortho processing configuration
+ORTHO_DOWNSAMPLE_PERCENT = 75  # Downsample orthophotos to 75% to reduce file size and improve frontend performance
+
 DB = DatabaseManager()
 #AZ = AzureStorageManager(DB.name)
 

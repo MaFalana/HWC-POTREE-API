@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 from pyproj import Transformer, CRS
+from config.main import ORTHO_DOWNSAMPLE_PERCENT
 
 logger = logging.getLogger(__name__)
 
@@ -148,57 +149,45 @@ def raster_to_leaflet_overlay(
         bounds = [[south, west], [north, east]]
         logger.info(f"Extracted bounds: {bounds}")
         
-        # Step 3: Convert to PNG with tiled processing and fast compression
+        # Step 3: Convert to PNG with tiled processing, fast compression, and downsampling
         # Tiled processing reduces memory usage for large images
-        logger.info("Converting to PNG format with tiled processing")
+        # Downsampling reduces file size for faster web display
+        logger.info(f"Converting to PNG format with tiled processing (downsampled to {ORTHO_DOWNSAMPLE_PERCENT}%)")
         
         # Check if source has alpha band or nodata values
         has_alpha = info.get("bands", [{}])[-1].get("colorInterpretation") == "Alpha"
         nodata_value = info.get("bands", [{}])[0].get("noDataValue")
         
+        # Build common gdal_translate options
+        common_options = [
+            "gdal_translate",
+            "-of", "PNG",
+            "-outsize", f"{ORTHO_DOWNSAMPLE_PERCENT}%", "0",  # Downsample width, height auto-calculated
+            "-co", "TILED=YES",
+            "-co", "BLOCKXSIZE=512",
+            "-co", "BLOCKYSIZE=512",
+            "-co", "ZLEVEL=1",  # Fast compression to reduce memory usage
+        ]
+        
         if has_alpha:
-            # Source already has alpha, just convert with tiling
-            logger.info("Source has alpha channel, converting with tiled processing")
-            _run([
-                "gdal_translate",
-                "-of", "PNG",
-                "-co", "TILED=YES",
-                "-co", "BLOCKXSIZE=512",
-                "-co", "BLOCKYSIZE=512",
-                "-co", "ZLEVEL=1",  # Fast compression to reduce memory usage
-                input_path,
-                output_png
-            ], timeout=1800)  # 30 minute timeout for large files
+            # Source already has alpha, just convert with tiling and downsampling
+            logger.info("Source has alpha channel, converting with tiled processing and downsampling")
+            _run(common_options + [input_path, output_png], timeout=1800)  # 30 minute timeout for large files
         elif nodata_value is not None:
-            # Source has nodata value, convert to alpha with tiling
-            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel with tiled processing")
-            _run([
-                "gdal_translate",
-                "-of", "PNG",
+            # Source has nodata value, convert to alpha with tiling and downsampling
+            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel with tiled processing and downsampling")
+            _run(common_options + [
                 "-b", "1",
                 "-b", "2",
                 "-b", "3",
                 "-b", "mask",
-                "-co", "TILED=YES",
-                "-co", "BLOCKXSIZE=512",
-                "-co", "BLOCKYSIZE=512",
-                "-co", "ZLEVEL=1",
                 input_path,
                 output_png
             ], timeout=1800)
         else:
-            # No nodata or alpha, convert as-is with tiling
-            logger.info("Source has no nodata or alpha, converting with tiled processing")
-            _run([
-                "gdal_translate",
-                "-of", "PNG",
-                "-co", "TILED=YES",
-                "-co", "BLOCKXSIZE=512",
-                "-co", "BLOCKYSIZE=512",
-                "-co", "ZLEVEL=1",
-                input_path,
-                output_png
-            ], timeout=1800)
+            # No nodata or alpha, convert as-is with tiling and downsampling
+            logger.info("Source has no nodata or alpha, converting with tiled processing and downsampling")
+            _run(common_options + [input_path, output_png], timeout=1800)
         
         logger.info("Conversion completed successfully")
         
