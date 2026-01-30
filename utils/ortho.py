@@ -1,8 +1,8 @@
 """
-Utility for converting georeferenced rasters to Leaflet-compatible PNG overlays.
+Utility for converting georeferenced rasters to Leaflet-compatible WebP overlays.
 
 This module provides functionality to convert GeoTIFF and other georeferenced
-raster formats into transparent PNG images with EPSG:4326 bounds for use with
+raster formats into transparent WebP images with EPSG:4326 bounds for use with
 Leaflet's imageOverlay feature.
 """
 
@@ -48,18 +48,19 @@ def _run(cmd: List[str], timeout: int = 3600) -> str:
 
 def raster_to_leaflet_overlay(
     input_path: str,
-    output_png: str,
+    output_webp: str,
 ) -> Dict[str, List[List[float]]]:
     """
-    Convert a georeferenced raster into a transparent PNG and return Leaflet bounds.
+    Convert a georeferenced raster into a transparent WebP and return Leaflet bounds.
     
     This function:
     1. Extracts bounds from the original raster (in native CRS)
     2. Transforms corner coordinates to EPSG:4326 (WGS84) for Leaflet
-    3. Converts to PNG with alpha transparency (no reprojection)
+    3. Converts to WebP with alpha transparency (no reprojection)
     
-    Note: The PNG will be in the original projection, but Leaflet bounds are in WGS84.
+    Note: The WebP will be in the original projection, but Leaflet bounds are in WGS84.
     This works well for most use cases and is much faster than full reprojection.
+    WebP provides 25-35% smaller file sizes than PNG with same quality.
     
     Supported input formats:
     - GeoTIFF (.tif, .tiff)
@@ -68,7 +69,7 @@ def raster_to_leaflet_overlay(
     
     Args:
         input_path: Path to input georeferenced raster file
-        output_png: Path where output PNG should be saved
+        output_webp: Path where output WebP should be saved
         
     Returns:
         Dictionary with bounds in Leaflet format:
@@ -78,14 +79,14 @@ def raster_to_leaflet_overlay(
         RuntimeError: If conversion fails or input has no georeferencing
         
     Example:
-        >>> result = raster_to_leaflet_overlay("input.tif", "overlay.png")
+        >>> result = raster_to_leaflet_overlay("input.tif", "overlay.webp")
         >>> bounds = result["bounds"]
-        >>> # Use in Leaflet: L.imageOverlay("/overlay.png", bounds).addTo(map);
+        >>> # Use in Leaflet: L.imageOverlay("/overlay.webp", bounds).addTo(map);
     """
-    logger.info(f"Converting raster to Leaflet overlay: {input_path} -> {output_png}")
+    logger.info(f"Converting raster to Leaflet overlay: {input_path} -> {output_webp}")
     
     input_path = str(Path(input_path))
-    output_png = str(Path(output_png))
+    output_webp = str(Path(output_webp))
     
     try:
         # Step 1: Get raster info and extract bounds in native CRS
@@ -149,45 +150,46 @@ def raster_to_leaflet_overlay(
         bounds = [[south, west], [north, east]]
         logger.info(f"Extracted bounds: {bounds}")
         
-        # Step 3: Convert to PNG with tiled processing, fast compression, and downsampling
+        # Step 3: Convert to WebP with tiled processing and downsampling
+        # WebP provides 25-35% smaller file sizes than PNG with same quality
         # Tiled processing reduces memory usage for large images
         # Downsampling reduces file size for faster web display
-        logger.info(f"Converting to PNG format with tiled processing (downsampled to {ORTHO_DOWNSAMPLE_PERCENT}%)")
+        logger.info(f"Converting to WebP format with tiled processing (downsampled to {ORTHO_DOWNSAMPLE_PERCENT}%)")
         
         # Check if source has alpha band or nodata values
         has_alpha = info.get("bands", [{}])[-1].get("colorInterpretation") == "Alpha"
         nodata_value = info.get("bands", [{}])[0].get("noDataValue")
         
-        # Build common gdal_translate options
+        # Build common gdal_translate options for WebP
+        # WebP uses quality (0-100) instead of compression level
+        # Quality 90 provides excellent quality with good compression
         common_options = [
             "gdal_translate",
-            "-of", "PNG",
+            "-of", "WEBP",
             "-outsize", f"{ORTHO_DOWNSAMPLE_PERCENT}%", "0",  # Downsample width, height auto-calculated
-            "-co", "TILED=YES",
-            "-co", "BLOCKXSIZE=512",
-            "-co", "BLOCKYSIZE=512",
-            "-co", "ZLEVEL=1",  # Fast compression to reduce memory usage
+            "-co", "QUALITY=90",  # High quality WebP compression
+            "-co", "LOSSLESS=NO",  # Use lossy compression for smaller files
         ]
         
         if has_alpha:
-            # Source already has alpha, just convert with tiling and downsampling
-            logger.info("Source has alpha channel, converting with tiled processing and downsampling")
-            _run(common_options + [input_path, output_png], timeout=1800)  # 30 minute timeout for large files
+            # Source already has alpha, just convert with downsampling
+            logger.info("Source has alpha channel, converting with downsampling")
+            _run(common_options + [input_path, output_webp], timeout=1800)  # 30 minute timeout for large files
         elif nodata_value is not None:
-            # Source has nodata value, convert to alpha with tiling and downsampling
-            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel with tiled processing and downsampling")
+            # Source has nodata value, convert to alpha with downsampling
+            logger.info(f"Source has nodata value ({nodata_value}), adding alpha channel with downsampling")
             _run(common_options + [
                 "-b", "1",
                 "-b", "2",
                 "-b", "3",
                 "-b", "mask",
                 input_path,
-                output_png
+                output_webp
             ], timeout=1800)
         else:
-            # No nodata or alpha, convert as-is with tiling and downsampling
-            logger.info("Source has no nodata or alpha, converting with tiled processing and downsampling")
-            _run(common_options + [input_path, output_png], timeout=1800)
+            # No nodata or alpha, convert as-is with downsampling
+            logger.info("Source has no nodata or alpha, converting with downsampling")
+            _run(common_options + [input_path, output_webp], timeout=1800)
         
         logger.info("Conversion completed successfully")
         

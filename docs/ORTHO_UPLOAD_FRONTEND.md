@@ -1,5 +1,16 @@
 # Orthophoto Upload - Frontend Implementation Guide
 
+## Overview
+
+The ortho upload feature converts georeferenced raster files to **WebP overlays** with Leaflet-compatible bounds.
+
+**Why WebP?**
+- 25-35% smaller file sizes than PNG
+- Faster loading times
+- Supports transparency (alpha channel)
+- Native browser support (Chrome 23+, Firefox 65+, Safari 14+, Edge 18+)
+- Works seamlessly with Leaflet's `L.imageOverlay()`
+
 ## API Endpoint
 
 ```
@@ -19,6 +30,8 @@ POST /projects/{project_id}/ortho
 - **Any format** - can use generic .wld world file
 
 **Max File Size:** 30GB
+
+**Output:** WebP image with transparency support
 
 ---
 
@@ -464,7 +477,8 @@ function ProjectPage({ projectId }) {
         <div className="ortho-preview">
           <h3>Orthophoto</h3>
           <img src={project.ortho.thumbnail} alt="Ortho thumbnail" />
-          <a href={project.ortho.url} target="_blank">View Full Size</a>
+          <a href={project.ortho.url} target="_blank">View Full Size (WebP)</a>
+          <p>Bounds: {JSON.stringify(project.ortho.bounds)}</p>
         </div>
       )}
     </div>

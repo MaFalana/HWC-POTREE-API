@@ -310,9 +310,9 @@ class JobWorker:
     
     def _convert_to_png_overlay(self, input_path: str, job_id: str) -> tuple[str, list]:
         """
-        Convert georeferenced raster to PNG overlay with bounds.
+        Convert georeferenced raster to WebP overlay with bounds.
         
-        Uses the raster_to_leaflet_overlay utility to create a transparent PNG
+        Uses the raster_to_leaflet_overlay utility to create a transparent WebP
         in EPSG:4326 projection with extracted bounds for Leaflet.
         
         Args:
@@ -320,37 +320,37 @@ class JobWorker:
             job_id: Job ID for logging and progress tracking
             
         Returns:
-            Tuple of (output_png_path, bounds) where bounds is [[south, west], [north, east]]
+            Tuple of (output_webp_path, bounds) where bounds is [[south, west], [north, east]]
             
         Raises:
-            RuntimeError: If PNG conversion fails
+            RuntimeError: If WebP conversion fails
         """
-        logger.info(f"Job {job_id}: Starting PNG overlay conversion")
-        logger.info(f"Job {job_id}: Converting to PNG with EPSG:4326 bounds")
+        logger.info(f"Job {job_id}: Starting WebP overlay conversion")
+        logger.info(f"Job {job_id}: Converting to WebP with EPSG:4326 bounds")
         
         # Update job progress
         self.db.update_job_status(
             job_id,
             "processing",
-            progress_message="Converting to PNG overlay"
+            progress_message="Converting to WebP overlay"
         )
         
         try:
             from utils.ortho import raster_to_leaflet_overlay
             
             # Create output path in same directory as input
-            output_path = os.path.splitext(input_path)[0] + '_overlay.png'
+            output_path = os.path.splitext(input_path)[0] + '_overlay.webp'
             
-            # Convert raster to PNG overlay and extract bounds
+            # Convert raster to WebP overlay and extract bounds
             result = raster_to_leaflet_overlay(input_path, output_path)
             bounds = result['bounds']
             
             # Verify output file was created
             if not os.path.exists(output_path):
-                logger.error(f"Job {job_id}: PNG output file not created at {output_path}")
-                raise RuntimeError("PNG conversion failed: output file not created")
+                logger.error(f"Job {job_id}: WebP output file not created at {output_path}")
+                raise RuntimeError("WebP conversion failed: output file not created")
             
-            logger.info(f"Job {job_id}: PNG overlay conversion completed successfully")
+            logger.info(f"Job {job_id}: WebP overlay conversion completed successfully")
             logger.info(f"Job {job_id}: Output file: {output_path}")
             logger.info(f"Job {job_id}: Bounds: {bounds}")
             
@@ -365,23 +365,23 @@ class JobWorker:
             return output_path, bounds
             
         except Exception as e:
-            logger.error(f"Job {job_id}: Error during PNG conversion: {e}", exc_info=True)
-            raise RuntimeError(f"Failed to convert to PNG overlay: {e}")
+            logger.error(f"Job {job_id}: Error during WebP conversion: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to convert to WebP overlay: {e}")
     
-    def _generate_ortho_thumbnail(self, png_path: str, job_id: str) -> Optional[str]:
+    def _generate_ortho_thumbnail(self, webp_path: str, job_id: str) -> Optional[str]:
         """
-        Generate thumbnail from PNG overlay file.
+        Generate thumbnail from WebP overlay file.
         
-        Uses gdal_translate to create a PNG preview with 512px width and proportional height.
+        Uses gdal_translate to create a WebP preview with 512px width and proportional height.
         This method is designed to be non-blocking - if thumbnail generation fails, it logs
         the error and returns None, allowing the main job to continue successfully.
         
         Args:
-            png_path: Path to the PNG overlay file
+            webp_path: Path to the WebP overlay file
             job_id: Job ID for logging and progress tracking
             
         Returns:
-            Path to the generated thumbnail PNG file, or None if generation fails
+            Path to the generated thumbnail WebP file, or None if generation fails
         """
         import subprocess
         
@@ -395,16 +395,17 @@ class JobWorker:
         )
         
         try:
-            # Create thumbnail path in same directory as PNG
-            thumbnail_path = os.path.splitext(png_path)[0] + '_thumbnail.png'
+            # Create thumbnail path in same directory as WebP
+            thumbnail_path = os.path.splitext(webp_path)[0] + '_thumbnail.webp'
             
-            # Run gdal_translate to create PNG thumbnail
+            # Run gdal_translate to create WebP thumbnail
             # -outsize 512 0 means 512px wide with proportional height
             result = subprocess.run([
                 'gdal_translate',
-                '-of', 'PNG',
+                '-of', 'WEBP',
                 '-outsize', '512', '0',
-                png_path,
+                '-co', 'QUALITY=85',  # Slightly lower quality for thumbnail
+                webp_path,
                 thumbnail_path
             ], capture_output=True, text=True, timeout=30)  # 30 second timeout
             
@@ -431,18 +432,18 @@ class JobWorker:
             logger.warning(f"Job {job_id}: Error during thumbnail generation: {e}", exc_info=True)
             return None
     
-    def _upload_ortho_to_azure(self, project_id: str, png_path: str, thumbnail_path: Optional[str], job_id: str) -> dict:
+    def _upload_ortho_to_azure(self, project_id: str, webp_path: str, thumbnail_path: Optional[str], job_id: str) -> dict:
         """
-        Upload PNG overlay and thumbnail to Azure Blob Storage.
+        Upload WebP overlay and thumbnail to Azure Blob Storage.
         
-        Uploads the PNG file to {project_id}/ortho/ortho.png and optionally uploads
-        the thumbnail to {project_id}/ortho/ortho_thumbnail.png. Returns public URLs
+        Uploads the WebP file to {project_id}/ortho/ortho.webp and optionally uploads
+        the thumbnail to {project_id}/ortho/ortho_thumbnail.webp. Returns public URLs
         for both files.
         
         Args:
             project_id: Project ID for organizing files in Azure
-            png_path: Local path to the PNG overlay file
-            thumbnail_path: Optional local path to the thumbnail PNG file
+            webp_path: Local path to the WebP overlay file
+            thumbnail_path: Optional local path to the thumbnail WebP file
             job_id: Job ID for logging and progress tracking
             
         Returns:
@@ -461,34 +462,34 @@ class JobWorker:
         )
         
         try:
-            # Upload PNG overlay file
-            png_blob_name = f"{project_id}/ortho/ortho.png"
-            logger.info(f"Job {job_id}: Uploading PNG overlay to {png_blob_name}")
+            # Upload WebP overlay file
+            webp_blob_name = f"{project_id}/ortho/ortho.webp"
+            logger.info(f"Job {job_id}: Uploading WebP overlay to {webp_blob_name}")
             
-            with open(png_path, 'rb') as f:
+            with open(webp_path, 'rb') as f:
                 self.db.az.upload_bytes(
                     data=f.read(),
-                    blob_name=png_blob_name,
-                    content_type="image/png",
+                    blob_name=webp_blob_name,
+                    content_type="image/webp",
                     overwrite=True
                 )
             
-            logger.info(f"Job {job_id}: PNG overlay uploaded successfully")
+            logger.info(f"Job {job_id}: WebP overlay uploaded successfully")
             
-            # Generate public URL for PNG
-            png_url = self.db.az.get_public_url(png_blob_name)
+            # Generate public URL for WebP
+            webp_url = self.db.az.get_public_url(webp_blob_name)
             
             # Upload thumbnail if it exists
             thumbnail_url = None
             if thumbnail_path and os.path.exists(thumbnail_path):
-                thumbnail_blob_name = f"{project_id}/ortho/ortho_thumbnail.png"
+                thumbnail_blob_name = f"{project_id}/ortho/ortho_thumbnail.webp"
                 logger.info(f"Job {job_id}: Uploading thumbnail to {thumbnail_blob_name}")
                 
                 with open(thumbnail_path, 'rb') as f:
                     self.db.az.upload_bytes(
                         data=f.read(),
                         blob_name=thumbnail_blob_name,
-                        content_type="image/png",
+                        content_type="image/webp",
                         overwrite=True
                     )
                 
@@ -500,7 +501,7 @@ class JobWorker:
                 logger.info(f"Job {job_id}: No thumbnail to upload")
             
             result = {
-                'url': png_url,
+                'url': webp_url,
                 'thumbnail': thumbnail_url
             }
             
@@ -781,11 +782,11 @@ class JobWorker:
         3. Check cancellation
         4. Validate GeoTIFF with gdalinfo
         5. Check cancellation
-        6. Convert to PNG overlay and extract bounds
+        6. Convert to WebP overlay and extract bounds
         7. Check cancellation
         8. Generate thumbnail (optional)
         9. Check cancellation
-        10. Upload PNG and thumbnail to Azure
+        10. Upload WebP and thumbnail to Azure
         11. Update project with ortho URLs and bounds
         12. Mark job as completed
         13. Cleanup temporary files
@@ -797,7 +798,7 @@ class JobWorker:
             job: Job object to process (must have type "ortho_conversion")
         """
         local_file = None
-        png_file = None
+        webp_file = None
         thumbnail_file = None
         bounds = None
         
@@ -830,23 +831,23 @@ class JobWorker:
             # Check cancellation
             self._check_cancellation(job.id)
             
-            # Step 3: Convert to PNG overlay and extract bounds
-            logger.info(f"Job {job.id}: Converting to PNG overlay")
-            png_file, bounds = self._convert_to_png_overlay(local_file, job.id)
+            # Step 3: Convert to WebP overlay and extract bounds
+            logger.info(f"Job {job.id}: Converting to WebP overlay")
+            webp_file, bounds = self._convert_to_png_overlay(local_file, job.id)
             
             # Check cancellation
             self._check_cancellation(job.id)
             
             # Step 4: Generate thumbnail (optional)
             logger.info(f"Job {job.id}: Generating thumbnail")
-            thumbnail_file = self._generate_ortho_thumbnail(png_file, job.id)
+            thumbnail_file = self._generate_ortho_thumbnail(webp_file, job.id)
             
             # Check cancellation
             self._check_cancellation(job.id)
             
             # Step 5: Upload to Azure
             logger.info(f"Job {job.id}: Uploading to Azure")
-            ortho_urls = self._upload_ortho_to_azure(job.project_id, png_file, thumbnail_file, job.id)
+            ortho_urls = self._upload_ortho_to_azure(job.project_id, webp_file, thumbnail_file, job.id)
             
             # Step 6: Update project with ortho URLs and bounds
             logger.info(f"Job {job.id}: Updating project")
@@ -862,7 +863,7 @@ class JobWorker:
             logger.info(f"Job {job.id}: Ortho processing completed successfully")
             
             # Step 8: Cleanup temporary files
-            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, webp_file, thumbnail_file)
             
         except CancellationException as e:
             # Handle job cancellation
@@ -870,7 +871,7 @@ class JobWorker:
             self._handle_ortho_cancellation(job)
             
             # Cleanup files
-            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, webp_file, thumbnail_file)
             
         except Exception as e:
             # Handle general errors
@@ -878,7 +879,7 @@ class JobWorker:
             self._handle_ortho_error(job, e)
             
             # Cleanup files
-            self._cleanup_ortho_files(job.id, local_file, png_file, thumbnail_file)
+            self._cleanup_ortho_files(job.id, local_file, webp_file, thumbnail_file)
     
     def _handle_cancellation(self, job: Job, output_dir: Optional[str] = None):
         """
